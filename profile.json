@@ -1,0 +1,127 @@
+{
+  "personal": {
+    "first_name": "María Fernanda",
+    "last_name": "Blanco Pinto",
+    "email": "mafeblanco5@gmail.com",
+    "phone": "+57 300 861 5282",
+    "birth_date": "26/11/1990",
+    "nationality": "Colombiana",
+    "id_type": "Cedula de ciudadania",
+    "gender": "Mujer",
+    "civil_status": "Soltera",
+    "address": {
+      "street": "Cra 15",
+      "number": "89-59",
+      "city": "Bucaramanga",
+      "state": "Santander",
+      "country": "Colombia",
+      "postal_code": "680001"
+    }
+  },
+  "online": {
+    "linkedin": "https://www.linkedin.com/in/mariablanco-comercialymarketing/",
+    "portfolio": "https://v0-professional-landing-page-two-sigma.vercel.app/"
+  },
+  "professional_profile": {
+    "title": "Directora Comercial | Finanzas y Negocios Internacionales | Tech-Forward",
+    "summary": "Profesional en Finanzas y Negocios Internacionales con mas de 10 anos de trayectoria comercial y 5 anos liderando la direccion comercial en EdTech, consumo masivo, construccion y banca. Especialista en modelos comerciales sostenibles, alianzas estrategicas B2B y negociaciones de alto impacto.",
+    "desired_position": "Directora / Coordinadora Comercial y de Marketing",
+    "salary_min": 4000000,
+    "salary_max": 6000000,
+    "salary_currency": "COP",
+    "work_type": "Tiempo Completo",
+    "contract_type": "Contrato a termino indefinido"
+  },
+  "experience": [
+    {
+      "position": "Directora Comercial de Alianzas Empresariales",
+      "company": "Multicomputo - Multitech",
+      "start_date": "03/2026",
+      "end_date": null,
+      "current": true,
+      "city": "Bucaramanga"
+    },
+    {
+      "position": "Directora Comercial",
+      "company": "Camper Pais - Campuslands",
+      "start_date": "03/2025",
+      "end_date": "03/2026",
+      "current": false,
+      "city": "Bucaramanga"
+    },
+    {
+      "position": "Directora Comercial y Administradora",
+      "company": "Inversiones Alvarez SAS (Franquicia Don Jacobo)",
+      "start_date": "11/2020",
+      "end_date": "07/2024",
+      "current": false,
+      "city": "Barranquilla"
+    },
+    {
+      "position": "Directora Comercial y de Marketing Nacional",
+      "company": "Industria de Alimentos Don Jacobo",
+      "start_date": "08/2022",
+      "end_date": "01/2024",
+      "current": false,
+      "city": "Bucaramanga"
+    },
+    {
+      "position": "Ejecutiva Comercial",
+      "company": "Servimeters SAS",
+      "start_date": "02/2019",
+      "end_date": "11/2019",
+      "current": false,
+      "city": "Bucaramanga"
+    },
+    {
+      "position": "Ejecutiva Comercial Senior",
+      "company": "Fenix Construcciones SAS",
+      "start_date": "02/2016",
+      "end_date": "06/2018",
+      "current": false,
+      "city": "Bucaramanga"
+    }
+  ],
+  "education": [
+    {
+      "degree": "Profesional en Finanzas y Negocios Internacionales",
+      "institution": "Universidad de Manizales",
+      "start_date": "02/2015",
+      "end_date": "06/2019",
+      "status": "Graduado"
+    }
+  ],
+  "courses": [
+    {
+      "name": "Analisis de Datos con Python",
+      "institution": "Desafio Latam",
+      "year": "2025"
+    },
+    {
+      "name": "Diplomado en Gerencia de Proyectos",
+      "institution": "Universidad del Prado",
+      "year": "2025"
+    },
+    {
+      "name": "Seminario de Alta Gerencia",
+      "institution": "Universidad de Manizales",
+      "year": "2019"
+    }
+  ],
+  "languages": [
+    {"language": "Espanol", "level": "Nativo"},
+    {"language": "Ingles", "level": "B1 - Intermedio"}
+  ],
+  "skills": [
+    "Gestion Comercial B2B/B2G/B2C",
+    "Alianzas Estrategicas",
+    "Marketing Digital",
+    "Negociacion de Alto Nivel",
+    "IA Generativa aplicada",
+    "CRM",
+    "Liderazgo de Equipos",
+    "Visual Studio Code",
+    "GitHub",
+    "n8n"
+  ]
+}
