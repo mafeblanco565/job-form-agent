@@ -108,6 +108,13 @@ class BrowserAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    async def upload_file(self, selector: str, file_path: str) -> dict:
+        try:
+            await self.page.set_input_files(selector, file_path)
+            return {"success": True, "selector": selector, "file": file_path}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def execute_js(self, script: str) -> dict:
         try:
             result = await self.page.evaluate(script)
@@ -187,6 +194,18 @@ class BrowserAgent:
                 }
             },
             {
+                "name": "upload_file",
+                "description": "Sube un archivo (foto/documento) a un campo de tipo file",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "selector": {"type": "string"},
+                        "file_path": {"type": "string", "description": "Ruta local al archivo"}
+                    },
+                    "required": ["selector", "file_path"]
+                }
+            },
+            {
                 "name": "execute_js",
                 "description": "Ejecuta JavaScript en la pagina",
                 "input_schema": {
@@ -207,6 +226,7 @@ class BrowserAgent:
             "get_screenshot": self.get_screenshot,
             "get_page_text": self.get_page_text,
             "fill_date_field": self.fill_date_field,
+            "upload_file": self.upload_file,
             "execute_js": self.execute_js,
         }
         if tool_name not in tool_map:

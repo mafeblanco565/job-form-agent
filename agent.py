@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 load_dotenv()
 from browser_tools import BrowserAgent
@@ -29,12 +29,12 @@ def load_profile(profile_path: str = "profile.json") -> dict:
         return json.load(f)
 
 
-def build_system_prompt(profile: dict) -> str:
-    """Construye el system prompt con el perfil del candidato."""
+def build_system_prompt(profile: dict, photo_path: str = None) -> str:
+    photo_info = f"\nFOTO DEL CANDIDATO (ruta local para upload): {photo_path}" if photo_path else ""
     return f"""Eres un asistente experto en diligenciar formularios de empleo en Colombia.
 
 PERFIL DEL CANDIDATO:
-{json.dumps(profile, ensure_ascii=False, indent=2)}
+{json.dumps(profile, ensure_ascii=False, indent=2)}{photo_info}
 
 INSTRUCCIONES:
 1. Analiza el formulario de empleo que el usuario te proporciona
@@ -42,12 +42,13 @@ INSTRUCCIONES:
 3. Usa browser_tools para interactuar con el formulario
 4. Llena TODOS los campos disponibles con la informacion del perfil
 5. Si un campo no tiene informacion en el perfil, dejalo en blanco
-6. NUNCA envies/submitas el formulario - solo llenalo
-7. Al finalizar, reporta un resumen de lo que llenaste
+6. Si hay campo de foto/imagen y se proporciono ruta de foto, usa upload_file para subirla
+7. NUNCA envies/submitas el formulario - solo llenalo
+8. Al finalizar, usa get_screenshot para tomar una captura y reporta un resumen
 
 CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
 - Nombre / Primer nombre -> first_name
-- Apellido / Apellidos -> last_name  
+- Apellido / Apellidos -> last_name
 - Correo / Email -> email
 - Telefono / Celular -> phone
 - Fecha de nacimiento -> birth_date (formato DD/MM/YYYY)
@@ -66,31 +67,39 @@ REGLAS DE SEGURIDAD:
 """
 
 
-async def run_agent(url: str, profile_path: str = "profile.json"):
+async def run_agent(
+    url: str,
+    profile_path: str = "profile.json",
+    profile_data: dict = None,
+    photo_path: str = None,
+    update_callback=None,
+    screenshot_callback=None,
+):
     """Ejecuta el agente de diligenciamiento de formularios."""
-    
-    # Cargar perfil
-    profile = load_profile(profile_path)
-    print(f"Perfil cargado: {profile['personal']['first_name']} {profile['personal']['last_name']}")
-    
-    # Inicializar cliente Anthropic
-    client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    
-    # Inicializar detector de formularios
+
+    async def notify(msg: str):
+        print(msg)
+        if update_callback:
+            await update_callback(msg)
+
+    profile = profile_data if profile_data else load_profile(profile_path)
+    await notify(f"Perfil cargado: {profile['personal']['first_name']} {profile['personal']['last_name']}")
+
+    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
     detector = FormDetector()
     form_type = detector.detect(url)
-    print(f"Tipo de formulario detectado: {form_type}")
-    
-    # Inicializar agente de navegador
-    async with BrowserAgent() as browser:
-        # Navegar al formulario
-        print(f"Navegando a: {url}")
+    await notify(f"Tipo de formulario detectado: {form_type}")
+
+    headless = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
+
+    async with BrowserAgent(headless=headless) as browser:
+        await notify(f"Navegando a: {url}")
         await browser.navigate(url)
-        
-        # Obtener estructura del formulario
+
         form_structure = await browser.get_form_structure()
-        
-        # Construir historial de mensajes
+        await notify(f"Formulario analizado: {len(form_structure)} campos encontrados")
+
         messages = [
             {
                 "role": "user",
@@ -102,52 +111,54 @@ Tipo detectado: {form_type}
 Estructura del formulario encontrada:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
 
-Por favor, llena todos los campos posibles usando mi perfil. 
+Por favor, llena todos los campos posibles usando mi perfil.
 IMPORTANTE: NO hagas clic en el boton de enviar/submit al final.
+Al terminar, toma un screenshot con get_screenshot.
 """
             }
         ]
-        
-        # Ejecutar el agente con loop de herramientas
-        max_iterations = 10
+
+        max_iterations = 15
         for i in range(max_iterations):
-            response = client.messages.create(
+            response = await client.messages.create(
                 model="claude-opus-4-5",
                 max_tokens=4096,
-                system=build_system_prompt(profile),
+                system=build_system_prompt(profile, photo_path),
                 messages=messages,
                 tools=browser.get_tool_definitions()
             )
-            
-            # Verificar si terminamos
+
             if response.stop_reason == "end_turn":
-                print("\nAgente finalizo exitosamente.")
-                # Extraer y mostrar el resumen final
+                await notify("Agente finalizo exitosamente.")
                 for block in response.content:
                     if hasattr(block, 'text'):
-                        print("\nRESUMEN DEL AGENTE:")
-                        print(block.text)
+                        await notify(f"RESUMEN:\n{block.text}")
                 break
-            
-            # Procesar tool calls
+
             if response.stop_reason == "tool_use":
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
-                        print(f"  -> Ejecutando: {block.name}({list(block.input.keys())})")
+                        await notify(f"-> {block.name}")
                         result = await browser.execute_tool(block.name, block.input)
+
+                        # Capture screenshot for web display
+                        if block.name == "get_screenshot" and result.get("success") and screenshot_callback:
+                            await screenshot_callback(result["screenshot_base64"])
+
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "content": json.dumps(result, ensure_ascii=False)
                         })
-                
-                # Agregar respuesta del asistente y resultados al historial
+
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
-        
-        print("\nFormulario llenado. Por favor revisa y envia manualmente.")
-        input("Presiona Enter para cerrar el navegador...")
+
+        await notify("Formulario llenado. Revisa y envia manualmente.")
+
+        if not update_callback:
+            input("Presiona Enter para cerrar el navegador...")
 
 
 def main():
