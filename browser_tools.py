@@ -24,9 +24,13 @@ class BrowserAgent:
     
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
+        args = ["--disable-blink-features=AutomationControlled"]
+        if self.headless:
+            # Requerido para correr Chromium dentro de contenedores Docker
+            args += ["--no-sandbox", "--disable-dev-shm-usage"]
         self.browser = await self.playwright.chromium.launch(
             headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled"]
+            args=args
         )
         self.context = await self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"

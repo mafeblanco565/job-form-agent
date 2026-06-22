@@ -23,8 +23,9 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 from anthropic import AsyncAnthropic
 from agent import build_system_prompt, load_profile, run_agent
 
-UPLOADS_DIR = Path(__file__).parent / "uploads"
-UPLOADS_DIR.mkdir(exist_ok=True)
+# En Railway apunta al Volume montado en /data; localmente usa web/uploads
+UPLOADS_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "uploads"))
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
