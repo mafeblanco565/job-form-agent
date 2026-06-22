@@ -12,7 +12,10 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 from anthropic import Anthropic
+
+load_dotenv()
 from browser_tools import BrowserAgent
 from form_detector import FormDetector
 
