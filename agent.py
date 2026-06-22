@@ -1,6 +1,6 @@
 """
 job-form-agent - Agente principal
-Automatiza el diligenciamiento de formularios de empleo usando Claude AI
+Automatiza el diligenciamiento de formularios de empleo usando Gemini AI
 
 Uso:
     python agent.py --url "https://empresa.pandape.computrabajo.com/Apply?..."
@@ -13,7 +13,8 @@ import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from anthropic import AsyncAnthropic
+import google.generativeai as genai
+from google.generativeai import protos
 
 load_dotenv()
 from browser_tools import BrowserAgent
@@ -21,7 +22,6 @@ from form_detector import FormDetector
 
 
 def load_profile(profile_path: str = "profile.json") -> dict:
-    """Carga el perfil del candidato desde un archivo JSON."""
     path = Path(profile_path)
     if not path.exists():
         raise FileNotFoundError(f"Perfil no encontrado: {profile_path}")
@@ -39,7 +39,7 @@ PERFIL DEL CANDIDATO:
 INSTRUCCIONES:
 1. Analiza el formulario de empleo que el usuario te proporciona
 2. Mapea cada campo del formulario con los datos del perfil
-3. Usa browser_tools para interactuar con el formulario
+3. Usa las herramientas disponibles para interactuar con el formulario
 4. Llena TODOS los campos disponibles con la informacion del perfil
 5. Si un campo no tiene informacion en el perfil, dejalo en blanco
 6. Si hay campo de foto/imagen y se proporciono ruta de foto, usa upload_file para subirla
@@ -67,6 +67,38 @@ REGLAS DE SEGURIDAD:
 """
 
 
+def _build_gemini_tools(claude_tools: list) -> list:
+    """Convierte el formato de tools de Claude al formato de Gemini."""
+    TYPE_MAP = {
+        "string": protos.Type.STRING,
+        "integer": protos.Type.INTEGER,
+        "number": protos.Type.NUMBER,
+        "boolean": protos.Type.BOOLEAN,
+        "object": protos.Type.OBJECT,
+        "array": protos.Type.ARRAY,
+    }
+    declarations = []
+    for tool in claude_tools:
+        props = {}
+        for prop_name, prop_def in tool["input_schema"].get("properties", {}).items():
+            t = TYPE_MAP.get(prop_def.get("type", "string"), protos.Type.STRING)
+            props[prop_name] = protos.Schema(
+                type=t,
+                description=prop_def.get("description", "")
+            )
+        req = tool["input_schema"].get("required", [])
+        declarations.append(protos.FunctionDeclaration(
+            name=tool["name"],
+            description=tool["description"],
+            parameters=protos.Schema(
+                type=protos.Type.OBJECT,
+                properties=props,
+                required=req
+            ) if props else None
+        ))
+    return [protos.Tool(function_declarations=declarations)]
+
+
 async def run_agent(
     url: str,
     profile_path: str = "profile.json",
@@ -75,8 +107,6 @@ async def run_agent(
     update_callback=None,
     screenshot_callback=None,
 ):
-    """Ejecuta el agente de diligenciamiento de formularios."""
-
     async def notify(msg: str):
         print(msg)
         if update_callback:
@@ -85,7 +115,7 @@ async def run_agent(
     profile = profile_data if profile_data else load_profile(profile_path)
     await notify(f"Perfil cargado: {profile['personal']['first_name']} {profile['personal']['last_name']}")
 
-    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
 
     detector = FormDetector()
     form_type = detector.detect(url)
@@ -100,10 +130,14 @@ async def run_agent(
         form_structure = await browser.get_form_structure()
         await notify(f"Formulario analizado: {len(form_structure)} campos encontrados")
 
-        messages = [
-            {
-                "role": "user",
-                "content": f"""Necesito que llenes este formulario de empleo con mi informacion.
+        gemini_tools = _build_gemini_tools(browser.get_tool_definitions())
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            system_instruction=build_system_prompt(profile, photo_path),
+            tools=gemini_tools
+        )
+
+        initial_message = f"""Necesito que llenes este formulario de empleo con mi informacion.
 
 URL del formulario: {url}
 Tipo detectado: {form_type}
@@ -115,45 +149,50 @@ Por favor, llena todos los campos posibles usando mi perfil.
 IMPORTANTE: NO hagas clic en el boton de enviar/submit al final.
 Al terminar, toma un screenshot con get_screenshot.
 """
-            }
-        ]
+        contents = [{"role": "user", "parts": [{"text": initial_message}]}]
 
         max_iterations = 15
         for i in range(max_iterations):
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=4096,
-                system=build_system_prompt(profile, photo_path),
-                messages=messages,
-                tools=browser.get_tool_definitions()
+            response = await model.generate_content_async(contents)
+
+            has_tool_calls = any(
+                hasattr(part, "function_call") and part.function_call.name
+                for part in response.parts
             )
 
-            if response.stop_reason == "end_turn":
+            if not has_tool_calls:
                 await notify("Agente finalizo exitosamente.")
-                for block in response.content:
-                    if hasattr(block, 'text'):
-                        await notify(f"RESUMEN:\n{block.text}")
+                for part in response.parts:
+                    if hasattr(part, "text") and part.text:
+                        await notify(f"RESUMEN:\n{part.text}")
                 break
 
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        await notify(f"-> {block.name}")
-                        result = await browser.execute_tool(block.name, block.input)
+            # Agregar respuesta del modelo al historial
+            contents.append({"role": "model", "parts": response.parts})
 
-                        # Capture screenshot for web display
-                        if block.name == "get_screenshot" and result.get("success") and screenshot_callback:
-                            await screenshot_callback(result["screenshot_base64"])
+            # Ejecutar tools y recolectar resultados
+            fn_responses = []
+            for part in response.parts:
+                if not (hasattr(part, "function_call") and part.function_call.name):
+                    continue
+                fn = part.function_call
+                await notify(f"-> {fn.name}")
+                args = dict(fn.args)
+                result = await browser.execute_tool(fn.name, args)
 
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, ensure_ascii=False)
-                        })
+                if fn.name == "get_screenshot" and result.get("success") and screenshot_callback:
+                    await screenshot_callback(result["screenshot_base64"])
 
-                messages.append({"role": "assistant", "content": response.content})
-                messages.append({"role": "user", "content": tool_results})
+                fn_responses.append(
+                    protos.Part(
+                        function_response=protos.FunctionResponse(
+                            name=fn.name,
+                            response={"result": json.dumps(result, ensure_ascii=False)}
+                        )
+                    )
+                )
+
+            contents.append({"role": "user", "parts": fn_responses})
 
         await notify("Formulario llenado. Revisa y envia manualmente.")
 
@@ -165,17 +204,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Agente para diligenciar formularios de empleo automaticamente"
     )
-    parser.add_argument(
-        "--url", 
-        required=True,
-        help="URL del formulario de empleo"
-    )
-    parser.add_argument(
-        "--profile",
-        default="profile.json",
-        help="Ruta al archivo de perfil JSON (default: profile.json)"
-    )
-    
+    parser.add_argument("--url", required=True, help="URL del formulario de empleo")
+    parser.add_argument("--profile", default="profile.json", help="Ruta al perfil JSON")
     args = parser.parse_args()
     asyncio.run(run_agent(args.url, args.profile))
 
