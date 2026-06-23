@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).parent.parent))
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-import google.generativeai as genai
+from anthropic import AsyncAnthropic
 from agent import build_system_prompt, load_profile, run_agent
 
 # En Railway apunta al Volume montado en /data; localmente usa web/uploads
@@ -74,11 +74,14 @@ async def upload_cv(file: UploadFile = File(...)):
     if not full_text.strip():
         return JSONResponse({"error": "El archivo esta vacio o no tiene texto legible"}, status_code=400)
 
-    # Usar Gemini Flash para extraer el perfil estructurado
-    genai.configure(api_key=os.environ.get("GOOGLE_API_KEY"))
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    response = await model.generate_content_async(
-        f"""Extrae la informacion del siguiente CV y devuelvela en formato JSON con esta estructura exacta.
+    # Usar Claude Haiku para extraer el perfil estructurado
+    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=2000,
+        messages=[{
+            "role": "user",
+            "content": f"""Extrae la informacion del siguiente CV y devuelvela en formato JSON con esta estructura exacta.
 Si un campo no esta en el CV, dejalo vacio ("") o 0 para numeros o [] para listas.
 Solo devuelve el JSON, sin explicaciones ni markdown.
 
@@ -125,10 +128,11 @@ Solo devuelve el JSON, sin explicaciones ni markdown.
 
 CV:
 {full_text}"""
+        }]
     )
 
     try:
-        text = response.text.strip()
+        text = response.content[0].text.strip()
         # Limpiar posible markdown
         if text.startswith("```"):
             text = text.split("```")[1]

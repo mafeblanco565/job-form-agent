@@ -1,8 +1,8 @@
 # job-form-agent - Dependencias Python
 # Instalar con: pip install -r requirements.txt
 
-# Google Gemini AI (gratis con API key de AI Studio)
-google-generativeai>=0.8.0
+# Cliente oficial de Anthropic (Claude AI)
+anthropic>=0.40.0
 
 # Automatizacion del navegador
 playwright>=1.45.0
