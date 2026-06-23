@@ -187,25 +187,30 @@ Estructura inicial del formulario:
                 btn = browser.page.locator(f"button:has-text('{btn_text}'), input[value='{btn_text}']").first
                 if await btn.is_visible(timeout=2000) and await btn.is_enabled(timeout=1000):
                     await btn.click()
-                    await browser.page.wait_for_timeout(3000)
+                    # Esperar que cargue la pagina de verificacion/confirmacion
+                    try:
+                        await browser.page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        pass
+                    await browser.page.wait_for_timeout(2000)
                     submitted = True
                     await notify(f"✓ Clic en '{btn_text}'")
                     break
             except Exception:
                 pass
 
-        # Tomar screenshot final
+        # Tomar screenshot DESPUES de que cargue la pagina de confirmacion
         sc = await browser.get_screenshot()
         if sc.get("success") and screenshot_callback:
             await screenshot_callback(sc["screenshot_base64"])
 
         page_final = (await browser.get_page_text()).get("text", "")
-        if any(w in page_final.lower() for w in ["verificar", "verifica", "correo enviado", "candidatura"]):
-            await notify("✓ POSTULACION ENVIADA — revisa tu correo para verificar identidad")
+        if any(w in page_final.lower() for w in ["verificar", "verifica", "correo enviado", "candidatura", "identidad"]):
+            await notify("✓ POSTULACION ENVIADA — revisa mafeblanco5@gmail.com para verificar identidad")
         elif submitted:
             await notify("✓ Formulario enviado — verifica en Computrabajo > Mis postulaciones")
         else:
-            await notify("Campos llenados — el boton SIGUIENTE estaba deshabilitado (verifica que todos los campos requeridos esten llenos)")
+            await notify("SIGUIENTE deshabilitado — el campo Salario puede estar vacio")
 
         if not update_callback:
             input("Presiona Enter para cerrar el navegador...")
