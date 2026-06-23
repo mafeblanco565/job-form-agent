@@ -268,30 +268,95 @@ class BrowserAgent:
                 await log(f"Error CV: {e}")
 
         # ── PASO 6: Llenar formulario completo ──────────────────────────────
-        # Esperar a que el formulario cargue (campo Nombre debe estar visible)
+        # Pandape usa Vuetify: las etiquetas son <label for="id">Nombre</label>+<input id="id">
+        # no usa placeholder= en los inputs. Esperar a que cargue el select de Nacionalidad.
         await log("Paso 6: Esperando que el formulario cargue...")
         try:
-            await self.page.wait_for_selector('input[placeholder="Nombre"]', state="visible", timeout=12000)
+            await self.page.wait_for_selector(
+                "select[id*='nationality' i], select[id*='naciona' i]",
+                state="visible", timeout=12000
+            )
+            await log("✓ Formulario listo (select Nacionalidad visible)")
         except Exception:
-            await log("⚠ Campo Nombre no apareció — el formulario puede estar en otro estado")
+            await log("⚠ Formulario puede estar en otro estado")
 
         await self.page.wait_for_timeout(800)
         await log("Paso 6: Llenando campos...")
 
-        async def fill_input(placeholder, value):
+        # Debug: dump de todos los inputs visibles para ver qué hay en el DOM
+        dom_inputs = await self.page.evaluate("""
+            () => [...document.querySelectorAll('input,textarea')].filter(
+                el => el.offsetParent !== null
+            ).map(el => {
+                let lbl = '';
+                if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]'); if(l) lbl = l.innerText.trim(); }
+                if (!lbl) { const p = el.closest('.v-text-field__slot,.v-input__slot,div'); if(p){const l=p.querySelector('label');if(l)lbl=l.innerText.trim();}}
+                return {type:el.type,ph:el.placeholder,label:lbl,id:el.id};
+            })
+        """)
+        await log(f"DOM inputs ({len(dom_inputs)}): " + str([f"{x['label'] or x['ph'] or x['type']}" for x in dom_inputs[:20]]))
+
+        async def fill_field(label_text, value):
+            """Intenta llenar por label (Vuetify), luego por placeholder, luego por JS label."""
             if not value:
                 return False
+            val = str(value)
+            # 1. Playwright get_by_label (Vuetify: <label for=id> + <input id=id>)
             try:
-                el = self.page.get_by_placeholder(placeholder, exact=False).first
-                await el.wait_for(state="visible", timeout=3000)
-                await el.click()
-                await el.fill(str(value))
-                await self.page.wait_for_timeout(150)
-                await log(f"  ✓ {placeholder}: {str(value)[:30]}")
+                el = self.page.get_by_label(label_text, exact=False).first
+                if await el.is_visible(timeout=2000):
+                    await el.click()
+                    await el.fill(val)
+                    await self.page.wait_for_timeout(120)
+                    await log(f"  ✓ [label] {label_text}: {val[:30]}")
+                    return True
+            except Exception:
+                pass
+            # 2. Playwright get_by_placeholder
+            try:
+                el = self.page.get_by_placeholder(label_text, exact=False).first
+                if await el.is_visible(timeout=1500):
+                    await el.click()
+                    await el.fill(val)
+                    await self.page.wait_for_timeout(120)
+                    await log(f"  ✓ [ph] {label_text}: {val[:30]}")
+                    return True
+            except Exception:
+                pass
+            # 3. JS: buscar input cuyo label asociado contiene el texto
+            res = await self.page.evaluate(f"""
+                (() => {{
+                    const kw = {repr(label_text.lower())};
+                    for (const inp of document.querySelectorAll('input,textarea')) {{
+                        let lbl = '';
+                        if (inp.id) {{
+                            const l = document.querySelector('label[for="' + inp.id + '"]');
+                            if (l) lbl = l.innerText.toLowerCase();
+                        }}
+                        if (!lbl) {{
+                            const p = inp.closest('.v-text-field__slot,.v-input__slot,div');
+                            if (p) {{ const l = p.querySelector('label'); if (l) lbl = l.innerText.toLowerCase(); }}
+                        }}
+                        if (!lbl) lbl = (inp.placeholder || '').toLowerCase();
+                        if (lbl.includes(kw) && inp.offsetParent !== null) {{
+                            inp.focus();
+                            inp.value = {repr(val)};
+                            ['input','change','blur'].forEach(ev =>
+                                inp.dispatchEvent(new Event(ev, {{bubbles:true}})));
+                            return lbl || inp.placeholder;
+                        }}
+                    }}
+                    return null;
+                }})()
+            """)
+            if res:
+                await log(f"  ✓ [js] {label_text}: {val[:30]}")
                 return True
-            except Exception as e:
-                await log(f"  ✗ {placeholder}: {e}")
-                return False
+            await log(f"  ✗ {label_text}: no encontrado por label/placeholder/js")
+            return False
+
+        # Alias para retrocompatibilidad con el resto del código
+        fill_input = fill_field
 
         async def select_value(selector, value, label=""):
             if not value:
@@ -503,23 +568,33 @@ class BrowserAgent:
             except Exception:
                 pass
 
-        # Llenar salario vía JS con los placeholders exactos del formulario
+        # Llenar salario buscando por label Vuetify (no placeholder)
         sal_result = await self.page.evaluate(f"""
             () => {{
                 const filled = [];
-                for (const inp of document.querySelectorAll('input')) {{
-                    const ph = (inp.placeholder || '').toLowerCase();
-                    if (ph.includes('entre') && ph.includes('bruto')) {{
-                        inp.value = '{sal_min}';
-                        ['input','change','blur'].forEach(ev =>
-                            inp.dispatchEvent(new Event(ev, {{bubbles: true}})));
-                        filled.push('min:' + inp.placeholder);
+                const inputs = [...document.querySelectorAll('input')].filter(i => i.offsetParent !== null);
+                for (const inp of inputs) {{
+                    let lbl = '';
+                    if (inp.id) {{
+                        const l = document.querySelector('label[for="' + inp.id + '"]');
+                        if (l) lbl = l.innerText.toLowerCase();
                     }}
-                    if ((ph.includes('y $') || ph.includes('hasta') || ph.includes('bruto mensual')) && !ph.includes('entre')) {{
-                        inp.value = '{sal_max}';
-                        ['input','change','blur'].forEach(ev =>
-                            inp.dispatchEvent(new Event(ev, {{bubbles: true}})));
-                        filled.push('max:' + inp.placeholder);
+                    if (!lbl) {{
+                        const p = inp.closest('.v-text-field__slot,.v-input__slot,div');
+                        if (p) {{ const l = p.querySelector('label'); if(l) lbl = l.innerText.toLowerCase(); }}
+                    }}
+                    if (!lbl) lbl = (inp.placeholder || '').toLowerCase();
+                    // mínimo: "entre", "desde", "mínimo", "min"
+                    if (lbl && (lbl.includes('entre') || lbl.includes('desde') || lbl.includes('mínimo') || lbl.includes('minimo'))) {{
+                        inp.focus(); inp.value = '{sal_min}';
+                        ['input','change','blur'].forEach(ev => inp.dispatchEvent(new Event(ev,{{bubbles:true}})));
+                        filled.push('min:' + lbl.substring(0,30));
+                    }}
+                    // máximo: "hasta", "y $", "máximo", "max"
+                    if (lbl && (lbl.includes('hasta') || lbl.includes('y $') || lbl.includes('máximo') || lbl.includes('maximo'))) {{
+                        inp.focus(); inp.value = '{sal_max}';
+                        ['input','change','blur'].forEach(ev => inp.dispatchEvent(new Event(ev,{{bubbles:true}})));
+                        filled.push('max:' + lbl.substring(0,30));
                     }}
                 }}
                 return filled;
@@ -528,7 +603,9 @@ class BrowserAgent:
         if sal_result:
             await log(f"  ✓ Salario llenado: {sal_result}")
         else:
-            await log("  ✗ Salario: no se encontraron campos Bruto mensual")
+            # fallback: llenar los primeros 2 inputs numéricos visibles de la sección
+            await fill_field("Entre", sal_min)
+            await fill_field("Bruto", sal_max)
 
         # Jornada y Tipo de contrato (selects dentro de la sección Salario)
         work_type = pp.get("work_type", "Tiempo Completo") or "Tiempo Completo"
