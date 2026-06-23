@@ -78,7 +78,7 @@ async def upload_cv(file: UploadFile = File(...)):
     client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
     response = await client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        max_tokens=4096,
         messages=[{
             "role": "user",
             "content": f"""Extrae la informacion del siguiente CV y devuelvela en formato JSON con esta estructura exacta.
