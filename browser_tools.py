@@ -112,6 +112,15 @@ class BrowserAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    async def click_and_wait(self, selector: str) -> dict:
+        """Hace clic en un elemento y espera a que la pagina cargue (para botones de navegacion)."""
+        try:
+            await self.page.click(selector)
+            await self.page.wait_for_load_state("networkidle", timeout=15000)
+            return {"success": True, "url": self.page.url, "title": await self.page.title()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def upload_file(self, selector: str, file_path: str) -> dict:
         try:
             await self.page.set_input_files(selector, file_path)
@@ -198,6 +207,15 @@ class BrowserAgent:
                 }
             },
             {
+                "name": "click_and_wait",
+                "description": "Hace clic en un boton de navegacion (CONTINUAR, SIGUIENTE, APLICAR A ESTE PROCESO) y espera que cargue la pagina",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"selector": {"type": "string"}},
+                    "required": ["selector"]
+                }
+            },
+            {
                 "name": "upload_file",
                 "description": "Sube un archivo (foto/documento) a un campo de tipo file",
                 "input_schema": {
@@ -223,6 +241,7 @@ class BrowserAgent:
     async def execute_tool(self, tool_name: str, tool_input: dict) -> Any:
         tool_map = {
             "navigate": self.navigate,
+            "click_and_wait": self.click_and_wait,
             "fill_input": self.fill_input,
             "select_option": self.select_option,
             "click_element": self.click_element,

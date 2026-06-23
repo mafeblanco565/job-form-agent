@@ -59,8 +59,22 @@ CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
 - Salario esperado -> professional_profile.salary_min / salary_max
 - LinkedIn -> online.linkedin
 
+FORMULARIOS MULTI-PASO (Pandape / Computrabajo):
+Estos formularios tienen varios pasos antes del formulario real. Debes navegarlos asi:
+1. Si ves boton "APLICAR A ESTE PROCESO" o similar -> usa click_and_wait para hacer clic
+2. Si ves "¿Cual es tu correo electronico?" -> llena el email del perfil y usa click_and_wait en "CONTINUAR"
+3. Si ves "Encontramos tu CV en nuestro sistema" -> selecciona "Incluir un nuevo CV" con click_element, luego click_and_wait en "CONTINUAR"
+4. Cuando llegues al formulario con campos Nombre/Apellido/Fecha -> llena todos los campos
+5. Despues de cada click_and_wait, usa get_form_structure para ver los nuevos campos disponibles
+
+BOTONES PERMITIDOS (usa click_and_wait):
+- "APLICAR A ESTE PROCESO", "CONTINUAR", "SIGUIENTE", "GUARDAR Y CONTINUAR"
+
+BOTONES PROHIBIDOS (NUNCA hacer clic):
+- "Enviar postulacion", "Confirmar aplicacion", "Aplicar ahora", "Submit", "Enviar"
+
 REGLAS DE SEGURIDAD:
-- NO hacer clic en boton de enviar/submit/aplicar
+- NO hacer clic en el boton final de envio de la postulacion
 - NO aceptar terminos sin confirmacion del usuario
 - NO compartir informacion con terceros
 """
@@ -100,17 +114,23 @@ async def run_agent(
         messages = [
             {
                 "role": "user",
-                "content": f"""Necesito que llenes este formulario de empleo con mi informacion.
+                "content": f"""Necesito que apliques a esta oferta de empleo y llenes el formulario con mi informacion.
 
-URL del formulario: {url}
+URL: {url}
 Tipo detectado: {form_type}
+Campos encontrados en la pagina actual: {len(form_structure)}
 
-Estructura del formulario encontrada:
+PASOS A SEGUIR:
+1. Usa get_page_text para entender en que paso del proceso estas
+2. Si ves boton "APLICAR A ESTE PROCESO" o similar -> usa click_and_wait
+3. Si pide email -> llenalo con el del perfil y click_and_wait en CONTINUAR
+4. Si ves opciones de CV -> selecciona "Incluir un nuevo CV" con click_element, luego click_and_wait en CONTINUAR
+5. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> usa get_form_structure y llena todos los campos
+6. Al terminar de llenar, toma un screenshot con get_screenshot
+7. NUNCA hagas clic en el boton final de envio de postulacion
+
+Estructura actual de la pagina:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
-
-Por favor, llena todos los campos posibles usando mi perfil.
-IMPORTANTE: NO hagas clic en el boton de enviar/submit al final.
-Al terminar, toma un screenshot con get_screenshot.
 """
             }
         ]
