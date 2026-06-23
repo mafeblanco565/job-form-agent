@@ -122,29 +122,137 @@ class BrowserAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
-    async def dismiss_cookies(self) -> dict:
-        """Intenta cerrar el popup de cookies si existe."""
+    async def _dismiss_cookies(self):
+        """Cierra popup de cookies si existe."""
         try:
-            for selector in [
+            for sel in [
                 "button:has-text('Aceptar y cerrar')",
                 "button:has-text('Aceptar')",
                 "button:has-text('Accept')",
                 "#onetrust-accept-btn-handler",
-                ".cookie-accept",
             ]:
-                btn = self.page.locator(selector).first
-                if await btn.is_visible(timeout=2000):
+                btn = self.page.locator(sel).first
+                if await btn.is_visible(timeout=1500):
                     await btn.click()
-                    await self.page.wait_for_timeout(500)
-                    return {"success": True, "dismissed": selector}
-            return {"success": True, "dismissed": None}
+                    await self.page.wait_for_timeout(400)
+                    return
         except Exception:
-            return {"success": True, "dismissed": None}
+            pass
+
+    async def _click_visible(self, *texts, timeout=6000):
+        """Hace clic en el primer elemento visible que contenga alguno de los textos dados."""
+        for text in texts:
+            try:
+                el = self.page.get_by_text(text, exact=False).first
+                if await el.is_visible(timeout=timeout):
+                    await el.click()
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def pandape_apply_flow(self, email: str, notify_fn=None) -> dict:
+        """
+        Navega el flujo completo de Pandape/Computrabajo hasta dejar el formulario listo.
+        Pasos: APLICAR A ESTE PROCESO → Redactar currículum → email → CV → formulario.
+        """
+        async def log(msg):
+            if notify_fn:
+                await notify_fn(msg)
+
+        # ── Paso 1: Cerrar cookies y hacer clic en APLICAR ─────────────────
+        await log("Buscando botón APLICAR A ESTE PROCESO...")
+        await self._dismiss_cookies()
+        await self.page.wait_for_timeout(800)
+
+        clicked = False
+        for attempt in range(4):
+            try:
+                # Intentar con varios locators posibles
+                for loc in [
+                    self.page.get_by_text("APLICAR A ESTE PROCESO", exact=False).first,
+                    self.page.locator("button", has_text="APLICAR").first,
+                    self.page.locator("a", has_text="APLICAR").first,
+                ]:
+                    if await loc.is_visible(timeout=2000):
+                        await loc.click()
+                        clicked = True
+                        break
+                if clicked:
+                    break
+            except Exception:
+                await self.page.wait_for_timeout(600)
+
+        if not clicked:
+            page_text = await self.page.inner_text("body")
+            return {"success": False, "step": "apply_button",
+                    "error": "No se encontró el botón APLICAR A ESTE PROCESO",
+                    "page_preview": page_text[:300]}
+
+        await log("✓ Clic en APLICAR A ESTE PROCESO — esperando dropdown...")
+        await self.page.wait_for_timeout(1200)
+
+        # ── Paso 2: Elegir "Redactar currículum" del dropdown ───────────────
+        await log("Seleccionando Redactar currículum...")
+        redactar_clicked = False
+        for attempt in range(4):
+            try:
+                for text in ["Redactar currículum", "Redactar curriculum", "Redactar"]:
+                    el = self.page.get_by_text(text, exact=False).first
+                    if await el.is_visible(timeout=2000):
+                        await el.click()
+                        redactar_clicked = True
+                        break
+                if redactar_clicked:
+                    break
+            except Exception:
+                await self.page.wait_for_timeout(600)
+
+        if not redactar_clicked:
+            # Si el dropdown no aparece, puede que el botón haya navegado directo
+            await log("Dropdown no visible — verificando página actual...")
+
+        await self.page.wait_for_timeout(2000)
+
+        # ── Paso 3: Manejar paso de correo electrónico ──────────────────────
+        page_text = await self.page.inner_text("body")
+        if any(w in page_text.lower() for w in ["correo", "email", "e-mail"]):
+            await log(f"Ingresando correo: {email}")
+            try:
+                inp = self.page.locator(
+                    "input[type='email'], input[name*='mail' i], input[placeholder*='correo' i]"
+                ).first
+                await inp.wait_for(state="visible", timeout=5000)
+                await inp.fill(email)
+                await self.page.wait_for_timeout(400)
+                await self._click_visible("CONTINUAR", "Continuar", "SIGUIENTE", "Siguiente")
+                await self.page.wait_for_timeout(2000)
+                await log("✓ Correo ingresado")
+            except Exception as e:
+                await log(f"Advertencia correo: {e}")
+
+        # ── Paso 4: Manejar paso de CV si aparece ───────────────────────────
+        page_text = await self.page.inner_text("body")
+        if any(w in page_text.lower() for w in ["nuevo cv", "encontramos tu cv", "subir cv"]):
+            await log("Manejando paso de CV...")
+            try:
+                await self._click_visible("Incluir un nuevo CV", "nuevo CV", "sin CV")
+                await self.page.wait_for_timeout(500)
+                await self._click_visible("CONTINUAR", "Continuar", "SIGUIENTE")
+                await self.page.wait_for_timeout(2000)
+            except Exception as e:
+                await log(f"Advertencia CV: {e}")
+
+        await log("✓ Navegación completada — formulario listo para llenar")
+        return {"success": True, "url": self.page.url}
+
+    async def dismiss_cookies(self) -> dict:
+        await self._dismiss_cookies()
+        return {"success": True}
 
     async def click_and_wait(self, selector: str) -> dict:
-        """Hace clic en un elemento y espera a que la pagina cargue (para botones de navegacion)."""
         try:
-            await self.dismiss_cookies()
+            await self._dismiss_cookies()
             await self.page.click(selector)
             await self.page.wait_for_load_state("networkidle", timeout=15000)
             return {"success": True, "url": self.page.url, "title": await self.page.title()}
@@ -152,26 +260,18 @@ class BrowserAgent:
             return {"success": False, "error": str(e)}
 
     async def click_text(self, text: str) -> dict:
-        """Busca y hace clic en cualquier elemento que contenga el texto visible dado.
-        Ideal para botones como 'APLICAR A ESTE PROCESO', 'CONTINUAR', 'SIGUIENTE'."""
         try:
-            await self.dismiss_cookies()
+            await self._dismiss_cookies()
             locator = self.page.get_by_text(text, exact=False).first
             await locator.wait_for(state="visible", timeout=8000)
             await locator.click()
-            # Espera navegacion si ocurre, pero no falla si solo abre un dropdown
             try:
                 await self.page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
                 pass
             await self.page.wait_for_timeout(800)
             page_text = await self.page.inner_text("body")
-            return {
-                "success": True,
-                "url": self.page.url,
-                "title": await self.page.title(),
-                "page_preview": page_text[:500],
-            }
+            return {"success": True, "url": self.page.url, "page_preview": page_text[:500]}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

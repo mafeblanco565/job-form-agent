@@ -30,60 +30,35 @@ def load_profile(profile_path: str = "profile.json") -> dict:
 
 def build_system_prompt(profile: dict, photo_path: str = None) -> str:
     photo_info = f"\nFOTO DEL CANDIDATO (ruta local para upload): {photo_path}" if photo_path else ""
-    return f"""Eres un asistente experto en diligenciar formularios de empleo en Colombia.
+    return f"""Eres un asistente experto en diligenciar y enviar formularios de empleo en Colombia.
 
 PERFIL DEL CANDIDATO:
 {json.dumps(profile, ensure_ascii=False, indent=2)}{photo_info}
 
-INSTRUCCIONES:
-1. Analiza el formulario de empleo que el usuario te proporciona
-2. Mapea cada campo del formulario con los datos del perfil
-3. Usa las herramientas disponibles para interactuar con el formulario
-4. Llena TODOS los campos disponibles con la informacion del perfil
-5. Si un campo no tiene informacion en el perfil, dejalo en blanco
-6. Si hay campo de foto/imagen y se proporciono ruta de foto, usa upload_file para subirla
-7. NUNCA envies/submitas el formulario - solo llenalo
-8. Al finalizar, usa get_screenshot para tomar una captura y reporta un resumen
+TU TAREA:
+1. Usa get_page_text para ver que campos hay en el formulario actual
+2. Usa get_form_structure para obtener los selectores exactos de los campos
+3. Llena TODOS los campos visibles con fill_input usando el perfil del candidato
+4. Si hay dropdowns usa select_option o click_text para seleccionar el valor correcto
+5. Si hay campo de foto y se proporciono ruta, usa upload_file para subirla
+6. Si un campo no tiene dato en el perfil, dejalo en blanco
+7. Cuando esten todos los campos llenos, haz click_text con el boton de envio:
+   - Busca: "Aplicar", "APLICAR", "Enviar postulacion", "Postularme", "Enviar", "CONTINUAR"
+8. Toma get_screenshot al final para confirmar
 
-CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
-- Nombre / Primer nombre -> first_name
-- Apellido / Apellidos -> last_name
-- Correo / Email -> email
-- Telefono / Celular -> phone
-- Fecha de nacimiento -> birth_date (formato DD/MM/YYYY)
-- Direccion -> address.street + address.number
-- Ciudad -> address.city
-- Pais -> address.country
-- Cargo actual / Titulo -> professional_profile.title
+MAPEO DE CAMPOS:
+- Nombre / Primer nombre -> personal.first_name
+- Apellido / Apellidos -> personal.last_name
+- Correo / Email -> personal.email
+- Telefono / Celular -> personal.phone
+- Fecha de nacimiento -> personal.birth_date (DD/MM/YYYY)
+- Direccion -> personal.address.street
+- Ciudad -> personal.address.city
+- Pais -> personal.address.country
+- Titulo profesional -> professional_profile.title
 - Perfil / Resumen -> professional_profile.summary
-- Salario esperado -> professional_profile.salary_min / salary_max
+- Salario esperado -> professional_profile.salary_min
 - LinkedIn -> online.linkedin
-
-FORMULARIOS MULTI-PASO (Pandape / Computrabajo):
-Estos formularios tienen varios pasos. Navegalos usando click_text con el texto exacto del boton:
-0. PRIMERO verifica con get_page_text: si la pagina muestra login/iniciar sesion -> DETENTE e informa al usuario
-1. Si ves boton "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
-   - Puede aparecer un dropdown. Si aparece -> click_text("Redactar currículum")
-   - Si no aparece dropdown, el boton navega directamente al formulario
-2. Si ves "¿Cual es tu correo electronico?" -> llena el email con fill_input, luego click_text("CONTINUAR")
-3. Si ves "Encontramos tu CV en nuestro sistema" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
-4. Cuando llegues al formulario con campos Nombre/Apellido/Fecha -> llena todos los campos con fill_input
-5. Despues de cada click_text o click_and_wait, usa get_page_text para ver en que paso estas
-
-HERRAMIENTAS PARA NAVEGAR:
-- click_text("texto del boton") -> para CUALQUIER boton por su texto visible (PREFERIR sobre click_and_wait)
-- click_and_wait("#selector") -> solo si conoces el selector CSS exacto
-
-BOTONES PERMITIDOS (usa click_text):
-- "APLICAR A ESTE PROCESO", "CONTINUAR", "SIGUIENTE", "GUARDAR Y CONTINUAR", "Incluir un nuevo CV"
-
-BOTONES PROHIBIDOS (NUNCA hacer clic):
-- "Enviar postulacion", "Confirmar aplicacion", "Aplicar ahora", "Submit", "Enviar", "Postular"
-
-REGLAS DE SEGURIDAD:
-- NO hacer clic en el boton final de envio de la postulacion
-- NO aceptar terminos sin confirmacion del usuario
-- NO compartir informacion con terceros
 """
 
 
@@ -110,41 +85,38 @@ async def run_agent(
     await notify(f"Tipo de formulario detectado: {form_type}")
 
     headless = os.environ.get("BROWSER_HEADLESS", "false").lower() == "true"
+    email = profile.get("personal", {}).get("email", "")
 
     async with BrowserAgent(headless=headless) as browser:
         await notify(f"Navegando a: {url}")
         await browser.navigate(url)
 
+        # Para Pandape/Computrabajo: navegar el flujo completo en Python (no el AI)
+        if any(d in url.lower() for d in ["pandape", "computrabajo"]):
+            nav = await browser.pandape_apply_flow(email=email, notify_fn=update_callback)
+            if not nav.get("success"):
+                await notify(f"Error en navegacion: {nav.get('error', 'desconocido')}")
+                await notify(f"Vista previa: {nav.get('page_preview', '')}")
+                return
+
         form_structure = await browser.get_form_structure()
-        await notify(f"Formulario analizado: {len(form_structure)} campos encontrados")
+        await notify(f"Campos en formulario: {len(form_structure)}")
 
         messages = [
             {
                 "role": "user",
-                "content": f"""Necesito que apliques a esta oferta de empleo y llenes el formulario con mi informacion.
+                "content": f"""Ya estoy en el formulario de la oferta. Llena todos los campos con mi perfil y luego envialo.
 
-URL: {url}
-Tipo detectado: {form_type}
-Campos encontrados en la pagina actual: {len(form_structure)}
+URL actual: {browser.page.url}
+Campos detectados: {len(form_structure)}
 
-PASOS A SEGUIR PARA PANDAPE:
-1. Usa get_page_text para ver en que paso estas
-2. Si la pagina muestra "Iniciar sesion", "Login" o "Ingresar" -> DETENTE y reporta: "Necesitas iniciar sesion en la ventana del navegador que se abrio. Una vez que hayas iniciado sesion, vuelve a intentar con la URL de la oferta."
-3. Si ves la pagina de la oferta con boton "APLICAR A ESTE PROCESO" -> click_text("APLICAR A ESTE PROCESO")
-4. Si aparece un dropdown con opciones -> click_text("Redactar currículum")
-5. Si pide correo electronico -> fill_input con email del perfil, luego click_text("CONTINUAR")
-6. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
-7. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> get_form_structure y fill_input para cada campo
-8. Al terminar todos los campos, toma screenshot con get_screenshot
-9. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
-
-Estructura actual de la pagina:
+Estructura del formulario:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
 """
             }
         ]
 
-        max_iterations = 15
+        max_iterations = 25
         for i in range(max_iterations):
             response = await client.messages.create(
                 model="claude-haiku-4-5-20251001",
