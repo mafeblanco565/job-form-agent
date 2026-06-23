@@ -8,39 +8,49 @@ Compatible con formularios de Pandape, Computrabajo, LinkedIn y otros.
 import asyncio
 import json
 import base64
+import os
+from pathlib import Path
 from typing import Any
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
+
+# Perfil persistente: guarda cookies y sesiones entre ejecuciones del agente
+_DEFAULT_PROFILE = str(Path(__file__).parent / "data" / "browser-profile")
 
 
 class BrowserAgent:
     """Agente de navegador con Playwright para automatizar formularios."""
-    
+
     def __init__(self, headless: bool = False):
         self.headless = headless
         self.playwright = None
         self.browser = None
         self.context = None
         self.page = None
-    
+
     async def __aenter__(self):
         self.playwright = await async_playwright().start()
+        profile_dir = os.environ.get("PLAYWRIGHT_PROFILE_DIR", _DEFAULT_PROFILE)
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
+
         args = ["--disable-blink-features=AutomationControlled"]
         if self.headless:
-            # Requerido para correr Chromium dentro de contenedores Docker
             args += ["--no-sandbox", "--disable-dev-shm-usage"]
-        self.browser = await self.playwright.chromium.launch(
+
+        # Contexto persistente: las cookies/sesiones se guardan entre ejecuciones.
+        # Primera vez: el usuario inicia sesion manualmente en la ventana que se abre.
+        # Siguientes veces: el agente ya esta autenticado automaticamente.
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=profile_dir,
             headless=self.headless,
-            args=args
-        )
-        self.context = await self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            args=args,
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         )
         self.page = await self.context.new_page()
         return self
-    
+
     async def __aexit__(self, *args):
-        if self.browser:
-            await self.browser.close()
+        if self.context:
+            await self.context.close()
         if self.playwright:
             await self.playwright.stop()
     

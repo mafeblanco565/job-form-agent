@@ -61,8 +61,9 @@ CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
 
 FORMULARIOS MULTI-PASO (Pandape / Computrabajo):
 Estos formularios tienen varios pasos. Navegalos usando click_text con el texto exacto del boton:
+0. PRIMERO verifica con get_page_text: si la pagina muestra login/iniciar sesion -> DETENTE e informa al usuario
 1. Si ves boton "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
-   - Puede aparecer un dropdown con opciones. Si aparece -> usa click_text("Redactar currículum")
+   - Puede aparecer un dropdown. Si aparece -> click_text("Redactar currículum")
    - Si no aparece dropdown, el boton navega directamente al formulario
 2. Si ves "¿Cual es tu correo electronico?" -> llena el email con fill_input, luego click_text("CONTINUAR")
 3. Si ves "Encontramos tu CV en nuestro sistema" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
@@ -128,13 +129,14 @@ Campos encontrados en la pagina actual: {len(form_structure)}
 
 PASOS A SEGUIR PARA PANDAPE:
 1. Usa get_page_text para ver en que paso estas
-2. Si ves "APLICAR A ESTE PROCESO" -> click_text("APLICAR A ESTE PROCESO")
-3. Si aparece un dropdown con "Redactar currículum" -> click_text("Redactar currículum")
-4. Si pide correo electronico -> fill_input con email del perfil, luego click_text("CONTINUAR")
-5. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
-6. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> get_form_structure y fill_input para cada campo
-7. Al terminar todos los campos, toma screenshot con get_screenshot
-8. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
+2. Si la pagina muestra "Iniciar sesion", "Login" o "Ingresar" -> DETENTE y reporta: "Necesitas iniciar sesion en la ventana del navegador que se abrio. Una vez que hayas iniciado sesion, vuelve a intentar con la URL de la oferta."
+3. Si ves la pagina de la oferta con boton "APLICAR A ESTE PROCESO" -> click_text("APLICAR A ESTE PROCESO")
+4. Si aparece un dropdown con opciones -> click_text("Redactar currículum")
+5. Si pide correo electronico -> fill_input con email del perfil, luego click_text("CONTINUAR")
+6. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
+7. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> get_form_structure y fill_input para cada campo
+8. Al terminar todos los campos, toma screenshot con get_screenshot
+9. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
 
 Estructura actual de la pagina:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
