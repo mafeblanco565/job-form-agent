@@ -112,10 +112,43 @@ class BrowserAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
     
+    async def dismiss_cookies(self) -> dict:
+        """Intenta cerrar el popup de cookies si existe."""
+        try:
+            for selector in [
+                "button:has-text('Aceptar y cerrar')",
+                "button:has-text('Aceptar')",
+                "button:has-text('Accept')",
+                "#onetrust-accept-btn-handler",
+                ".cookie-accept",
+            ]:
+                btn = self.page.locator(selector).first
+                if await btn.is_visible(timeout=2000):
+                    await btn.click()
+                    await self.page.wait_for_timeout(500)
+                    return {"success": True, "dismissed": selector}
+            return {"success": True, "dismissed": None}
+        except Exception:
+            return {"success": True, "dismissed": None}
+
     async def click_and_wait(self, selector: str) -> dict:
         """Hace clic en un elemento y espera a que la pagina cargue (para botones de navegacion)."""
         try:
+            await self.dismiss_cookies()
             await self.page.click(selector)
+            await self.page.wait_for_load_state("networkidle", timeout=15000)
+            return {"success": True, "url": self.page.url, "title": await self.page.title()}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def click_text(self, text: str) -> dict:
+        """Busca y hace clic en cualquier elemento que contenga el texto visible dado.
+        Ideal para botones como 'APLICAR A ESTE PROCESO', 'CONTINUAR', 'SIGUIENTE'."""
+        try:
+            await self.dismiss_cookies()
+            locator = self.page.get_by_text(text, exact=False).first
+            await locator.wait_for(state="visible", timeout=8000)
+            await locator.click()
             await self.page.wait_for_load_state("networkidle", timeout=15000)
             return {"success": True, "url": self.page.url, "title": await self.page.title()}
         except Exception as e:
@@ -208,11 +241,20 @@ class BrowserAgent:
             },
             {
                 "name": "click_and_wait",
-                "description": "Hace clic en un boton de navegacion (CONTINUAR, SIGUIENTE, APLICAR A ESTE PROCESO) y espera que cargue la pagina",
+                "description": "Hace clic en un elemento CSS y espera que cargue la pagina. Usa click_text si no conoces el selector exacto.",
                 "input_schema": {
                     "type": "object",
                     "properties": {"selector": {"type": "string"}},
                     "required": ["selector"]
+                }
+            },
+            {
+                "name": "click_text",
+                "description": "Busca y hace clic en cualquier elemento por su texto visible. USAR para botones como 'APLICAR A ESTE PROCESO', 'CONTINUAR', 'SIGUIENTE', 'Incluir un nuevo CV'. Cierra cookies automaticamente antes de hacer clic.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string", "description": "Texto visible del boton o enlace a hacer clic"}},
+                    "required": ["text"]
                 }
             },
             {
@@ -242,6 +284,7 @@ class BrowserAgent:
         tool_map = {
             "navigate": self.navigate,
             "click_and_wait": self.click_and_wait,
+            "click_text": self.click_text,
             "fill_input": self.fill_input,
             "select_option": self.select_option,
             "click_element": self.click_element,

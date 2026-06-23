@@ -60,18 +60,22 @@ CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
 - LinkedIn -> online.linkedin
 
 FORMULARIOS MULTI-PASO (Pandape / Computrabajo):
-Estos formularios tienen varios pasos antes del formulario real. Debes navegarlos asi:
-1. Si ves boton "APLICAR A ESTE PROCESO" o similar -> usa click_and_wait para hacer clic
-2. Si ves "¿Cual es tu correo electronico?" -> llena el email del perfil y usa click_and_wait en "CONTINUAR"
-3. Si ves "Encontramos tu CV en nuestro sistema" -> selecciona "Incluir un nuevo CV" con click_element, luego click_and_wait en "CONTINUAR"
-4. Cuando llegues al formulario con campos Nombre/Apellido/Fecha -> llena todos los campos
-5. Despues de cada click_and_wait, usa get_form_structure para ver los nuevos campos disponibles
+Estos formularios tienen varios pasos. Navegalos usando click_text con el texto exacto del boton:
+1. Si ves boton "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
+2. Si ves "¿Cual es tu correo electronico?" -> llena el email con fill_input, luego click_text("CONTINUAR")
+3. Si ves "Encontramos tu CV en nuestro sistema" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
+4. Cuando llegues al formulario con campos Nombre/Apellido/Fecha -> llena todos los campos con fill_input
+5. Despues de cada click_text o click_and_wait, usa get_page_text para ver en que paso estas
 
-BOTONES PERMITIDOS (usa click_and_wait):
-- "APLICAR A ESTE PROCESO", "CONTINUAR", "SIGUIENTE", "GUARDAR Y CONTINUAR"
+HERRAMIENTAS PARA NAVEGAR:
+- click_text("texto del boton") -> para CUALQUIER boton por su texto visible (PREFERIR sobre click_and_wait)
+- click_and_wait("#selector") -> solo si conoces el selector CSS exacto
+
+BOTONES PERMITIDOS (usa click_text):
+- "APLICAR A ESTE PROCESO", "CONTINUAR", "SIGUIENTE", "GUARDAR Y CONTINUAR", "Incluir un nuevo CV"
 
 BOTONES PROHIBIDOS (NUNCA hacer clic):
-- "Enviar postulacion", "Confirmar aplicacion", "Aplicar ahora", "Submit", "Enviar"
+- "Enviar postulacion", "Confirmar aplicacion", "Aplicar ahora", "Submit", "Enviar", "Postular"
 
 REGLAS DE SEGURIDAD:
 - NO hacer clic en el boton final de envio de la postulacion
@@ -121,13 +125,13 @@ Tipo detectado: {form_type}
 Campos encontrados en la pagina actual: {len(form_structure)}
 
 PASOS A SEGUIR:
-1. Usa get_page_text para entender en que paso del proceso estas
-2. Si ves boton "APLICAR A ESTE PROCESO" o similar -> usa click_and_wait
-3. Si pide email -> llenalo con el del perfil y click_and_wait en CONTINUAR
-4. Si ves opciones de CV -> selecciona "Incluir un nuevo CV" con click_element, luego click_and_wait en CONTINUAR
-5. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> usa get_form_structure y llena todos los campos
-6. Al terminar de llenar, toma un screenshot con get_screenshot
-7. NUNCA hagas clic en el boton final de envio de postulacion
+1. Usa get_page_text para ver en que paso estas
+2. Si ves "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
+3. Si pide email -> fill_input con el email del perfil, luego click_text("CONTINUAR")
+4. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
+5. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> usa get_form_structure y fill_input para cada campo
+6. Al terminar de llenar todos los campos, toma screenshot con get_screenshot
+7. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
 
 Estructura actual de la pagina:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
