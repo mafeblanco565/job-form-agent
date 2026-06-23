@@ -194,7 +194,7 @@ Estructura inicial del formulario:
         # ── Python hace clic en SIGUIENTE/Aplicar (no depende del AI) ─────────
         await notify("Buscando boton SIGUIENTE para enviar postulacion...")
         submitted = False
-        for btn_text in ["SIGUIENTE", "Siguiente", "APLICAR", "Aplicar", "Enviar postulacion", "Postularme"]:
+        for btn_text in ["ENVIAR APLICACIÓN", "ENVIAR APLICACION", "SIGUIENTE", "Siguiente", "APLICAR", "Aplicar", "Enviar postulacion", "Postularme"]:
             try:
                 btn = browser.page.locator(f"button:has-text('{btn_text}'), input[value='{btn_text}']").first
                 if await btn.is_visible(timeout=2000) and await btn.is_enabled(timeout=1000):

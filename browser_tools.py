@@ -243,7 +243,39 @@ class BrowserAgent:
             except Exception as e:
                 await log(f"Advertencia CV: {e}")
 
-        await log("✓ Navegación completada — formulario listo para llenar")
+        # ── Paso 5: Expandir secciones colapsadas del formulario ────────────
+        await self.page.wait_for_timeout(1000)
+        await log("Expandiendo secciones del formulario...")
+        for section in ["Habilidades", "Salario deseado", "Información adicional", "Experiencia", "Educación"]:
+            try:
+                el = self.page.get_by_text(section, exact=False).first
+                if await el.is_visible(timeout=1500):
+                    await el.click()
+                    await self.page.wait_for_timeout(500)
+            except Exception:
+                pass
+
+        # ── Paso 6: Llenar salario si los campos están vacíos ───────────────
+        await self.page.wait_for_timeout(500)
+        try:
+            salary_min = self.page.locator("input[placeholder*='Entre']").first
+            if await salary_min.is_visible(timeout=2000):
+                val = await salary_min.input_value()
+                if not val.strip():
+                    await salary_min.fill("3000000")
+                    await log("✓ Salario mínimo llenado: 3000000")
+        except Exception:
+            pass
+        try:
+            salary_max = self.page.locator("input[placeholder*='Bruto Mensual']").first
+            if await salary_max.is_visible(timeout=1000):
+                val = await salary_max.input_value()
+                if not val.strip():
+                    await salary_max.fill("5000000")
+        except Exception:
+            pass
+
+        await log("✓ Formulario listo para llenar")
         return {"success": True, "url": self.page.url}
 
     async def dismiss_cookies(self) -> dict:
