@@ -275,6 +275,17 @@ class BrowserAgent:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def expand_section(self, section_text: str) -> dict:
+        """Expande una seccion colapsada de acordeon haciendo clic en su encabezado."""
+        try:
+            el = self.page.get_by_text(section_text, exact=False).first
+            await el.wait_for(state="visible", timeout=5000)
+            await el.click()
+            await self.page.wait_for_timeout(600)
+            return {"success": True, "expanded": section_text}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     async def upload_file(self, selector: str, file_path: str) -> dict:
         try:
             await self.page.set_input_files(selector, file_path)
@@ -379,6 +390,15 @@ class BrowserAgent:
                 }
             },
             {
+                "name": "expand_section",
+                "description": "Expande una seccion colapsada (acordeon) del formulario haciendo clic en su titulo. Usar antes de fill_input para secciones como 'Habilidades', 'Salario deseado', 'Informacion adicional'.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"section_text": {"type": "string", "description": "Texto del encabezado de la seccion a expandir"}},
+                    "required": ["section_text"]
+                }
+            },
+            {
                 "name": "upload_file",
                 "description": "Sube un archivo (foto/documento) a un campo de tipo file",
                 "input_schema": {
@@ -406,6 +426,7 @@ class BrowserAgent:
             "navigate": self.navigate,
             "click_and_wait": self.click_and_wait,
             "click_text": self.click_text,
+            "expand_section": self.expand_section,
             "fill_input": self.fill_input,
             "select_option": self.select_option,
             "click_element": self.click_element,

@@ -35,16 +35,31 @@ def build_system_prompt(profile: dict, photo_path: str = None) -> str:
 PERFIL DEL CANDIDATO:
 {json.dumps(profile, ensure_ascii=False, indent=2)}{photo_info}
 
-TU TAREA:
-1. Usa get_page_text para ver que campos hay en el formulario actual
-2. Usa get_form_structure para obtener los selectores exactos de los campos
-3. Llena TODOS los campos visibles con fill_input usando el perfil del candidato
-4. Si hay dropdowns usa select_option o click_text para seleccionar el valor correcto
-5. Si hay campo de foto y se proporciono ruta, usa upload_file para subirla
-6. Si un campo no tiene dato en el perfil, dejalo en blanco
-7. Cuando esten todos los campos llenos, haz click_text con el boton de envio:
-   - Busca: "Aplicar", "APLICAR", "Enviar postulacion", "Postularme", "Enviar", "CONTINUAR"
-8. Toma get_screenshot al final para confirmar
+TU TAREA - SIGUE ESTOS PASOS EN ORDEN:
+
+PASO 1 - Ver el formulario:
+- Usa get_page_text para leer el texto completo de la pagina
+- Identifica todas las secciones visibles y colapsadas
+
+PASO 2 - Expandir secciones colapsadas:
+- Si hay secciones tipo acordeon (Habilidades, Salario, Informacion adicional, etc.)
+  USA click_text con el nombre exacto de cada seccion para expandirla
+- Despues de expandir cada seccion, usa get_form_structure para ver los campos nuevos
+- Repite para TODAS las secciones colapsadas antes de llenar cualquier campo
+
+PASO 3 - Llenar todos los campos:
+- Usa fill_input para cada campo con los datos del perfil
+- CAMPO CRITICO: "Salario deseado" -> usa el valor de professional_profile.salary_min
+- Si hay checkboxes de terminos/privacidad ya marcados, no los toques
+- Si un campo es dropdown, usa select_option o click_text con el valor
+
+PASO 4 - Navegar paginas multiples:
+- Este formulario puede tener MULTIPLES PAGINAS
+- Despues de llenar todos los campos visibles, haz click_text("SIGUIENTE") o click_text("CONTINUAR")
+- En la pagina siguiente repite PASOS 1-3 hasta llenar todos los campos
+- Sigue hasta llegar al boton final: "Aplicar", "Enviar postulacion", "Postularme", "Enviar"
+- Haz clic en ese boton final para enviar la postulacion
+- Toma get_screenshot para confirmar el envio exitoso
 
 MAPEO DE CAMPOS:
 - Nombre / Primer nombre -> personal.first_name
@@ -57,7 +72,8 @@ MAPEO DE CAMPOS:
 - Pais -> personal.address.country
 - Titulo profesional -> professional_profile.title
 - Perfil / Resumen -> professional_profile.summary
-- Salario esperado -> professional_profile.salary_min
+- Salario deseado -> professional_profile.salary_min (REQUERIDO - sin esto SIGUIENTE no funciona)
+- Habilidades -> skills (lista separada por comas)
 - LinkedIn -> online.linkedin
 """
 
@@ -102,15 +118,21 @@ async def run_agent(
         form_structure = await browser.get_form_structure()
         await notify(f"Campos en formulario: {len(form_structure)}")
 
+        page_text_preview = (await browser.get_page_text()).get("text", "")[:800]
+
         messages = [
             {
                 "role": "user",
-                "content": f"""Ya estoy en el formulario de la oferta. Llena todos los campos con mi perfil y luego envialo.
+                "content": f"""Estoy en el formulario de la oferta. Sigue los pasos del system prompt para llenarlo y enviarlo.
 
 URL actual: {browser.page.url}
-Campos detectados: {len(form_structure)}
+Campos detectados inicialmente: {len(form_structure)}
+IMPORTANTE: puede haber secciones colapsadas (acordeon) con mas campos adentro. Expande TODAS antes de llenar.
 
-Estructura del formulario:
+Texto visible de la pagina:
+{page_text_preview}
+
+Estructura inicial del formulario:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}
 """
             }
