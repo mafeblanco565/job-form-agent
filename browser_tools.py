@@ -370,56 +370,114 @@ class BrowserAgent:
             except Exception as e:
                 await log(f"  ✗ {label or selector}: {e}")
 
-        # Datos personales — campos de texto
-        await fill_input("Nombre",           first_name)
-        await fill_input("Apellido",         last_name)
-        await fill_input("Fecha de nacimiento", birth_date or "26/11/1990")
-        await fill_input("Teléfono móvil",   phone)
-        await fill_input("Teléfono fijo",    phone)   # campo fijo = mismo número móvil
-        await fill_input("Dirección",        "Bucaramanga, Santander")
+        async def fill_vuetify_select(label_text, option_text):
+            """Abre un Vuetify v-select buscando el label por JS y cliqueando su contenedor."""
+            try:
+                # JS: busca el label, sube hasta encontrar un div Vuetify y hace click
+                clicked = await self.page.evaluate(f"""
+                    (() => {{
+                        const kw = {repr(label_text.lower())};
+                        for (const lbl of document.querySelectorAll('label')) {{
+                            if (lbl.innerText.trim().toLowerCase().includes(kw)) {{
+                                let el = lbl.parentElement;
+                                for (let i = 0; i < 6; i++) {{
+                                    if (!el) break;
+                                    const cls = (el.className || '').toString();
+                                    if (cls.includes('v-select') || cls.includes('v-input') || cls.includes('v-autocomplete')) {{
+                                        el.click();
+                                        return lbl.innerText.trim();
+                                    }}
+                                    el = el.parentElement;
+                                }}
+                                // fallback: click el parentElement del label
+                                lbl.closest('div') && lbl.closest('div').click();
+                                return lbl.innerText.trim() + ' (fallback)';
+                            }}
+                        }}
+                        return null;
+                    }})()
+                """)
+                if not clicked:
+                    await log(f"  ✗ [v-select] {label_text}: label no encontrado en DOM")
+                    return False
+                await log(f"  [v-select] {label_text}: click → buscando '{option_text}'...")
+                await self.page.wait_for_timeout(800)
+                # Busca la opción en el dropdown abierto
+                opt = self.page.get_by_role("option", name=option_text, exact=False).first
+                if not await opt.is_visible(timeout=2500):
+                    opt = self.page.get_by_text(option_text, exact=True).first
+                if await opt.is_visible(timeout=2000):
+                    await opt.click()
+                    await self.page.wait_for_timeout(300)
+                    await log(f"  ✓ [v-select] {label_text}: {option_text}")
+                    return True
+                await log(f"  ✗ [v-select] {label_text}: opción '{option_text}' no apareció en dropdown")
+                await self.page.keyboard.press("Escape")
+            except Exception as e:
+                await log(f"  ✗ [v-select] {label_text}: {e}")
+            return False
 
-        # Checkbox "s/n" junto al campo Número de dirección
+        # Datos personales — campos de texto (Vuetify labels)
+        await fill_input("Nombre",              first_name)
+        await fill_input("Apellido",            last_name)
+        await fill_input("Fecha de nacimiento", birth_date or "26/11/1990")
+        await fill_input("Dirección",           "Bucaramanga, Santander")
+
+        # Prefijo de teléfono (x2: fijo y móvil) → código de Colombia "57"
         try:
-            sn_checked = await self.page.evaluate("""
+            n_prefijos = await self.page.evaluate("""
+                () => {
+                    let n = 0;
+                    for (const inp of document.querySelectorAll('input')) {
+                        let lbl = '';
+                        if (inp.id) { const l = document.querySelector('label[for="'+inp.id+'"]'); if(l) lbl=l.innerText.toLowerCase(); }
+                        if (!lbl) { const p=inp.closest('.v-text-field__slot,.v-input__slot,div'); if(p){const l=p.querySelector('label');if(l)lbl=l.innerText.toLowerCase();}}
+                        if (lbl.includes('prefijo') && inp.offsetParent !== null) {
+                            inp.value = '57';
+                            ['input','change','blur'].forEach(ev => inp.dispatchEvent(new Event(ev,{bubbles:true})));
+                            n++;
+                        }
+                    }
+                    return n;
+                }
+            """)
+            await log(f"  ✓ Prefijo(s) → 57 ({n_prefijos} campos)")
+        except Exception as e:
+            await log(f"  ✗ Prefijo: {e}")
+
+        await fill_input("Teléfono móvil", phone)
+        await fill_input("Teléfono",       phone)   # fijo — label exacto sin "fijo"
+
+        # Checkbox s/n (Número de dirección)
+        try:
+            sn = await self.page.evaluate("""
                 () => {
                     for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
                         const lbl = (cb.labels && cb.labels[0] && cb.labels[0].innerText) || '';
-                        const parent = (cb.parentElement && cb.parentElement.innerText) || '';
-                        if (lbl.trim() === 's/n' || parent.trim() === 's/n') {
-                            if (!cb.checked) cb.click();
-                            return true;
-                        }
+                        const par = (cb.parentElement && cb.parentElement.innerText) || '';
+                        if (lbl.trim()==='s/n' || par.trim()==='s/n') { if(!cb.checked) cb.click(); return true; }
                     }
                     return false;
                 }
             """)
-            await log(f"  {'✓' if sn_checked else '✗'} Checkbox s/n (número de dirección)")
+            await log(f"  {'✓' if sn else '✗'} Checkbox s/n")
         except Exception as e:
             await log(f"  ✗ Checkbox s/n: {e}")
 
-        # Selects con valores fijos
+        # Selects nativos (Nacionalidad y Tipo ID usan <select> nativo)
         await select_value("select[id*='nationality' i], select[id*='naciona' i]", "48", "Nacionalidad")
         await select_value("select[id*='identification' i], select[id*='identifi' i]", "1", "Tipo ID")
-        await select_value("select[id*='gender' i], select[id*='genero' i], select[id*='género' i]", "2", "Género")
-        await select_value("select[id*='country' i], select[id*='pais' i], select[id*='país' i]", "48", "País")
 
-        # Código postal — dropdown con búsqueda
+        # Vuetify v-select para Género y País
+        await fill_vuetify_select("Género", "Mujer")
+        await fill_vuetify_select("País",   "Colombia")
+
+        # Código postal — solo si el label es visible (no bloquear si no existe)
         try:
-            postal_trigger = self.page.locator("div[class*='postal'], div[class*='codigo']").first
-            if not await postal_trigger.is_visible(timeout=1500):
-                postal_trigger = self.page.get_by_placeholder("Código postal", exact=False).first
-            await postal_trigger.click()
-            await self.page.wait_for_timeout(500)
-            search_inp = self.page.locator("input[placeholder*='Buscar' i], input[placeholder*='Search' i]").last
-            if await search_inp.is_visible(timeout=2000):
-                await search_inp.fill("Bucaramanga")
-                await self.page.wait_for_timeout(2000)
-                first_opt = self.page.locator("li, div[class*='option'], div[class*='item']").filter(has_text="Bucaramanga").first
-                if await first_opt.is_visible(timeout=2000):
-                    await first_opt.click()
-                    await log("  ✓ Código postal: Bucaramanga")
-        except Exception as e:
-            await log(f"  ✗ Código postal: {e}")
+            if await self.page.locator("label", has_text="Código postal").first.is_visible(timeout=1500):
+                await fill_vuetify_select("Código postal", "Bucaramanga")
+        except Exception:
+            pass
 
         # Perfil profesional (accordion)
         pp_title = profile_data.get("professional_profile", {}).get("title", "")

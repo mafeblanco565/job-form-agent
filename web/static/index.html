@@ -498,6 +498,10 @@ async function runAgent() {
     const event = JSON.parse(e.data);
     if (event.type === 'log') {
       appendLog(event.text);
+      // Solo mostrar verde si el agente confirmó envío exitoso
+      if (event.text && (event.text.includes('POSTULACION ENVIADA') || event.text.includes('Postulación enviada'))) {
+        document.getElementById('done-section').classList.remove('hidden');
+      }
     } else if (event.type === 'screenshot') {
       document.getElementById('screenshot-img').src = '/screenshot?' + Date.now();
       document.getElementById('screenshot-section').classList.remove('hidden');
@@ -506,7 +510,7 @@ async function runAgent() {
       setBtnLoading('btn-run', false);
       document.getElementById('status-spinner').classList.add('hidden');
       document.getElementById('status-title').textContent = 'Completado';
-      document.getElementById('done-section').classList.remove('hidden');
+      // NO mostrar done-section aquí — solo se muestra si el log confirmó envío
     } else if (event.type === 'error') {
       evtSource.close();
       showAgentError(event.text);
