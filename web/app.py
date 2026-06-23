@@ -43,6 +43,16 @@ async def index():
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
 
+@app.get("/mode")
+async def get_mode():
+    is_railway = bool(
+        os.environ.get("RAILWAY_ENVIRONMENT")
+        or os.environ.get("RAILWAY_PROJECT_ID")
+        or os.environ.get("RAILWAY_SERVICE_ID")
+    )
+    return {"mode": "railway" if is_railway else "local"}
+
+
 # ─── Screenshot ───────────────────────────────────────────────────────────────
 
 @app.get("/screenshot")

@@ -37,6 +37,17 @@
     </div>
   </section>
 
+  <!-- Banner modo Railway (oculto por defecto, JS lo muestra si aplica) -->
+  <div id="railway-banner" class="hidden bg-amber-50 border-b border-amber-200 px-6 py-4">
+    <div class="max-w-3xl mx-auto flex items-start gap-3">
+      <span class="text-amber-500 text-xl mt-0.5">⚠️</span>
+      <div>
+        <p class="text-amber-800 font-semibold text-sm">Esta versión web solo prepara tu perfil — el agente debe correr en tu computador</p>
+        <p class="text-amber-700 text-xs mt-1">El navegador que llena el formulario necesita abrirse en tu pantalla para que puedas verlo y enviarlo tú. Sube tu CV aquí para preparar tu perfil y luego sigue las instrucciones del Paso 3.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Progress Steps -->
   <div class="max-w-3xl mx-auto px-6 py-8">
     <div class="flex items-center justify-center gap-0">
@@ -155,15 +166,58 @@
 
     <!-- ── STEP 3: Run Agent ─────────────────────────────── -->
     <div id="section-3" class="hidden">
-      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 mb-6">
+
+      <!-- Modo Railway: instrucciones para correr local -->
+      <div id="local-instructions" class="hidden bg-white rounded-2xl shadow-sm border border-amber-200 p-8 mb-6">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600 text-xl">💻</div>
+          <div>
+            <h2 class="text-xl font-bold text-gray-900">Corre el agente en tu computador</h2>
+            <p class="text-gray-500 text-sm">El navegador debe abrirse en tu pantalla para que puedas ver y enviar el formulario</p>
+          </div>
+        </div>
+
+        <div class="bg-gray-900 rounded-xl p-4 mb-4 font-mono text-sm">
+          <p class="text-gray-400 text-xs mb-2"># Abre una terminal en la carpeta del proyecto</p>
+          <p class="text-green-400">cd C:\Users\Tecnologia\OneDrive\Desktop\job-form-agent</p>
+          <p class="text-green-400">uvicorn web.app:app --reload --port 8000</p>
+        </div>
+
+        <div class="flex items-start gap-3 mb-4 p-4 bg-violet-50 rounded-xl">
+          <span class="text-violet-500 text-lg">🌐</span>
+          <div>
+            <p class="text-violet-800 font-semibold text-sm">Luego abre en tu navegador:</p>
+            <a href="http://localhost:8000" target="_blank" class="text-violet-600 font-mono text-sm hover:underline">http://localhost:8000</a>
+            <p class="text-violet-600 text-xs mt-1">Esa versión corre en tu máquina — el navegador se abrirá visible en tu pantalla.</p>
+          </div>
+        </div>
+
+        <div class="space-y-2 text-sm text-gray-600">
+          <div class="flex items-start gap-2">
+            <span class="text-green-500 mt-0.5">✓</span>
+            <span>El agente abre Chrome en tu pantalla — ves el formulario siendo llenado en tiempo real</span>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="text-green-500 mt-0.5">✓</span>
+            <span>Al terminar, el formulario queda abierto para que lo revises y hagas clic en Enviar tú</span>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="text-green-500 mt-0.5">✓</span>
+            <span>Esta página de Railway sigue siendo útil para preparar tu perfil desde el celular</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modo local: interfaz normal del agente -->
+      <div id="agent-panel" class="hidden bg-white rounded-2xl shadow-sm border border-gray-100 p-8 mb-6">
         <h2 class="text-xl font-bold text-gray-900 mb-1">Autocompletar formulario</h2>
         <p class="text-gray-500 text-sm mb-6">Pega la URL del formulario de empleo y el agente lo llenará automáticamente.</p>
 
         <label class="block text-sm font-medium text-gray-700 mb-2">URL de la oferta de empleo</label>
         <input type="url" id="form-url"
-               placeholder="https://genteutil.pandape.computrabajo.com/oferta/gerente-ventas"
+               placeholder="https://genteutil.pandape.computrabajo.com/Apply?of=ABC123..."
                class="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent" />
-        <p class="text-xs text-gray-400 mt-2">Pega la URL de la página de la oferta (donde dice "APLICAR A ESTE PROCESO"). El agente navegará los pasos automáticamente.</p>
+        <p class="text-xs text-gray-400 mt-2">Pega la URL completa del formulario de postulación (debe incluir parámetros como <code class="bg-gray-100 px-1 rounded">?of=...</code>). El agente navegará y llenará los campos automáticamente.</p>
 
         <button id="btn-run"
                 onclick="runAgent()"
@@ -223,6 +277,23 @@
 let currentStep = 1;
 let extractedProfile = null;
 let selectedFile = null;
+let isRailway = false;
+
+// Detecta si corre en Railway o local y adapta la UI
+async function detectMode() {
+  try {
+    const res = await fetch('/mode');
+    const data = await res.json();
+    isRailway = data.mode === 'railway';
+  } catch {
+    isRailway = false;
+  }
+  if (isRailway) {
+    document.getElementById('railway-banner').classList.remove('hidden');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', detectMode);
 
 // ── Drag & drop ──────────────────────────────────────────
 const dropZone = document.getElementById('drop-zone');
@@ -352,7 +423,16 @@ function goToStep(n) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function goToStep3() { goToStep(3); }
+function goToStep3() {
+  goToStep(3);
+  if (isRailway) {
+    document.getElementById('local-instructions').classList.remove('hidden');
+    document.getElementById('agent-panel').classList.add('hidden');
+  } else {
+    document.getElementById('local-instructions').classList.add('hidden');
+    document.getElementById('agent-panel').classList.remove('hidden');
+  }
+}
 
 // ── Run agent ────────────────────────────────────────────
 async function runAgent() {
