@@ -8,6 +8,8 @@ import base64
 import json
 import os
 import sys
+import threading
+import traceback
 import uuid
 from pathlib import Path
 
@@ -220,31 +222,53 @@ async def start_agent(url: str = Form(...)):
     queue: asyncio.Queue = asyncio.Queue()
     agent_queues[session_id] = queue
 
-    async def status_callback(msg: str):
-        await queue.put({"type": "log", "text": msg})
+    # Capturamos el loop principal de FastAPI para poder enviar eventos desde el thread
+    main_loop = asyncio.get_event_loop()
 
-    async def screenshot_callback(b64: str):
-        # Guardar screenshot en disco
-        img_data = base64.b64decode(b64)
-        (UPLOADS_DIR / "screenshot.png").write_bytes(img_data)
-        await queue.put({"type": "screenshot"})
+    def _bridge(coro):
+        """Ejecuta una corutina en el loop principal desde un thread."""
+        asyncio.run_coroutine_threadsafe(coro, main_loop).result(timeout=10)
 
-    async def run():
+    def run_in_thread():
+        # En Windows, uvicorn usa SelectorEventLoop que no soporta subprocesos
+        # (requeridos por Playwright). Usamos ProactorEventLoop en un thread separado.
+        if sys.platform == "win32":
+            loop = asyncio.ProactorEventLoop()
+        else:
+            loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def status_callback(msg: str):
+            _bridge(queue.put({"type": "log", "text": msg}))
+
+        async def screenshot_callback(b64: str):
+            img_data = base64.b64decode(b64)
+            (UPLOADS_DIR / "screenshot.png").write_bytes(img_data)
+            _bridge(queue.put({"type": "screenshot"}))
+
+        async def _run():
+            try:
+                profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
+                await run_agent(
+                    url=url,
+                    profile_data=profile_data,
+                    photo_path=photo_path,
+                    update_callback=status_callback,
+                    screenshot_callback=screenshot_callback,
+                )
+            except BaseException as e:
+                tb = traceback.format_exc()
+                msg = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+                _bridge(queue.put({"type": "error", "text": msg}))
+            finally:
+                _bridge(queue.put({"type": "done"}))
+
         try:
-            profile_data = json.loads(profile_path.read_text(encoding="utf-8"))
-            await run_agent(
-                url=url,
-                profile_data=profile_data,
-                photo_path=photo_path,
-                update_callback=status_callback,
-                screenshot_callback=screenshot_callback,
-            )
-        except Exception as e:
-            await queue.put({"type": "error", "text": str(e)})
+            loop.run_until_complete(_run())
         finally:
-            await queue.put({"type": "done"})
+            loop.close()
 
-    asyncio.create_task(run())
+    threading.Thread(target=run_in_thread, daemon=True).start()
     return {"session_id": session_id}
 
 
