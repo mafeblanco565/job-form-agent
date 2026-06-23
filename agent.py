@@ -62,6 +62,8 @@ CAMPOS COMUNES EN FORMULARIOS COLOMBIANOS:
 FORMULARIOS MULTI-PASO (Pandape / Computrabajo):
 Estos formularios tienen varios pasos. Navegalos usando click_text con el texto exacto del boton:
 1. Si ves boton "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
+   - Puede aparecer un dropdown con opciones. Si aparece -> usa click_text("Redactar currículum")
+   - Si no aparece dropdown, el boton navega directamente al formulario
 2. Si ves "¿Cual es tu correo electronico?" -> llena el email con fill_input, luego click_text("CONTINUAR")
 3. Si ves "Encontramos tu CV en nuestro sistema" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
 4. Cuando llegues al formulario con campos Nombre/Apellido/Fecha -> llena todos los campos con fill_input
@@ -124,14 +126,15 @@ URL: {url}
 Tipo detectado: {form_type}
 Campos encontrados en la pagina actual: {len(form_structure)}
 
-PASOS A SEGUIR:
+PASOS A SEGUIR PARA PANDAPE:
 1. Usa get_page_text para ver en que paso estas
-2. Si ves "APLICAR A ESTE PROCESO" -> usa click_text("APLICAR A ESTE PROCESO")
-3. Si pide email -> fill_input con el email del perfil, luego click_text("CONTINUAR")
-4. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
-5. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> usa get_form_structure y fill_input para cada campo
-6. Al terminar de llenar todos los campos, toma screenshot con get_screenshot
-7. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
+2. Si ves "APLICAR A ESTE PROCESO" -> click_text("APLICAR A ESTE PROCESO")
+3. Si aparece un dropdown con "Redactar currículum" -> click_text("Redactar currículum")
+4. Si pide correo electronico -> fill_input con email del perfil, luego click_text("CONTINUAR")
+5. Si ves "Encontramos tu CV" -> click_text("Incluir un nuevo CV"), luego click_text("CONTINUAR")
+6. Cuando llegues al formulario (Nombre, Apellido, Fecha, etc.) -> get_form_structure y fill_input para cada campo
+7. Al terminar todos los campos, toma screenshot con get_screenshot
+8. NUNCA hagas clic en: "Enviar postulacion", "Confirmar", "Postular", "Aplicar ahora", "Submit"
 
 Estructura actual de la pagina:
 {json.dumps(form_structure, ensure_ascii=False, indent=2)}

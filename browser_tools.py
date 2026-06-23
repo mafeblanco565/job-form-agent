@@ -149,8 +149,19 @@ class BrowserAgent:
             locator = self.page.get_by_text(text, exact=False).first
             await locator.wait_for(state="visible", timeout=8000)
             await locator.click()
-            await self.page.wait_for_load_state("networkidle", timeout=15000)
-            return {"success": True, "url": self.page.url, "title": await self.page.title()}
+            # Espera navegacion si ocurre, pero no falla si solo abre un dropdown
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            await self.page.wait_for_timeout(800)
+            page_text = await self.page.inner_text("body")
+            return {
+                "success": True,
+                "url": self.page.url,
+                "title": await self.page.title(),
+                "page_preview": page_text[:500],
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
