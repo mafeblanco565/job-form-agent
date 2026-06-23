@@ -50,6 +50,7 @@ PASO 2 - Expandir secciones colapsadas:
 PASO 3 - Llenar todos los campos:
 - Usa get_form_structure para ver los selectores exactos de cada campo
 - Llena con fill_input todos los campos que tengan datos en el perfil
+- NO toques botones de foto ("Añadir foto", "Subir foto", "Agregar foto") - la foto es opcional y abre un dialogo complejo, ignorala completamente
 - CAMPO CRITICO "Salario deseado":
   * El campo con placeholder "Entre $ (Bruto mensual)" es salary_min
   * El campo con placeholder "y $ (Bruto Mensual)" es salary_max
@@ -178,6 +179,17 @@ Estructura inicial del formulario:
 
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
+
+        # ── Cerrar cualquier modal abierto (foto, dialogo, etc.) ──────────────
+        for modal_btn in ["Guardar", "Aceptar", "Cerrar", "Close"]:
+            try:
+                btn = browser.page.locator(f"button:has-text('{modal_btn}')").first
+                if await btn.is_visible(timeout=1500):
+                    await btn.click()
+                    await browser.page.wait_for_timeout(800)
+                    await notify(f"Modal cerrado: '{modal_btn}'")
+            except Exception:
+                pass
 
         # ── Python hace clic en SIGUIENTE/Aplicar (no depende del AI) ─────────
         await notify("Buscando boton SIGUIENTE para enviar postulacion...")
