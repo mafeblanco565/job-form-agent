@@ -217,12 +217,12 @@ Estructura inicial del formulario:
             await screenshot_callback(sc["screenshot_base64"])
 
         page_final = (await browser.get_page_text()).get("text", "")
-        if any(w in page_final.lower() for w in ["verificar", "verifica", "correo enviado", "candidatura", "identidad"]):
-            await notify("✓ POSTULACION ENVIADA — revisa mafeblanco5@gmail.com para verificar identidad")
+        if "enviamos un correo" in page_final.lower() or "verificar tu identidad" in page_final.lower():
+            await notify("✓ POSTULACION ENVIADA — revisa tu correo para verificar identidad y confirmar candidatura")
         elif submitted:
-            await notify("✓ Formulario enviado — verifica en Computrabajo > Mis postulaciones")
+            await notify("SIGUIENTE presionado pero no llegó a confirmación — puede haber campos requeridos vacíos en el formulario")
         else:
-            await notify("SIGUIENTE deshabilitado — el campo Salario puede estar vacio")
+            await notify("SIGUIENTE deshabilitado — el campo Salario u otro campo requerido está vacío")
 
         if not update_callback:
             input("Presiona Enter para cerrar el navegador...")
