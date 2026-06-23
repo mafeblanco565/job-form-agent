@@ -113,7 +113,7 @@ async def run_agent(
 
         # Para Pandape/Computrabajo: navegar el flujo completo en Python (no el AI)
         if any(d in url.lower() for d in ["pandape", "computrabajo"]):
-            nav = await browser.pandape_apply_flow(email=email, notify_fn=update_callback)
+            nav = await browser.pandape_apply_flow(email=email, profile_data=profile, notify_fn=update_callback)
             if not nav.get("success"):
                 await notify(f"Error en navegacion: {nav.get('error', 'desconocido')}")
                 await notify(f"Vista previa: {nav.get('page_preview', '')}")

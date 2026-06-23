@@ -151,11 +151,14 @@ class BrowserAgent:
                 pass
         return False
 
-    async def pandape_apply_flow(self, email: str, notify_fn=None) -> dict:
+    async def pandape_apply_flow(self, email: str, profile_data: dict = None, notify_fn=None) -> dict:
         """
         Navega el flujo completo de Pandape/Computrabajo hasta dejar el formulario listo.
         Pasos: APLICAR A ESTE PROCESO → Redactar currículum → email → CV → formulario.
         """
+        profile_data = profile_data or {}
+        personal = profile_data.get("personal", {})
+
         async def log(msg):
             if notify_fn:
                 await notify_fn(msg)
@@ -243,7 +246,7 @@ class BrowserAgent:
             except Exception as e:
                 await log(f"Advertencia CV: {e}")
 
-        # ── Paso 5: Expandir secciones colapsadas del formulario ────────────
+        # ── Paso 5: Expandir TODAS las secciones colapsadas ────────────────
         await self.page.wait_for_timeout(1000)
         await log("Expandiendo secciones del formulario...")
         for section in ["Habilidades", "Salario deseado", "Información adicional", "Experiencia", "Educación"]:
@@ -251,31 +254,46 @@ class BrowserAgent:
                 el = self.page.get_by_text(section, exact=False).first
                 if await el.is_visible(timeout=1500):
                     await el.click()
-                    await self.page.wait_for_timeout(500)
+                    await self.page.wait_for_timeout(600)
             except Exception:
                 pass
 
-        # ── Paso 6: Llenar salario si los campos están vacíos ───────────────
-        await self.page.wait_for_timeout(500)
-        try:
-            salary_min = self.page.locator("input[placeholder*='Entre']").first
-            if await salary_min.is_visible(timeout=2000):
-                val = await salary_min.input_value()
-                if not val.strip():
-                    await salary_min.fill("3000000")
-                    await log("✓ Salario mínimo llenado: 3000000")
-        except Exception:
-            pass
-        try:
-            salary_max = self.page.locator("input[placeholder*='Bruto Mensual']").first
-            if await salary_max.is_visible(timeout=1000):
-                val = await salary_max.input_value()
-                if not val.strip():
-                    await salary_max.fill("5000000")
-        except Exception:
-            pass
+        await self.page.wait_for_timeout(800)
 
-        await log("✓ Formulario listo para llenar")
+        # ── Paso 6: Llenar campos requeridos en Python (no el AI) ───────────
+        await log("Llenando campos requeridos...")
+
+        async def fill_if_empty(selector: str, value: str):
+            if not value:
+                return
+            try:
+                el = self.page.locator(selector).first
+                if await el.is_visible(timeout=1500):
+                    current = await el.input_value()
+                    if not current.strip():
+                        await el.click()
+                        await el.fill(value)
+                        await self.page.wait_for_timeout(200)
+            except Exception:
+                pass
+
+        first_name = personal.get("first_name", "")
+        last_name  = personal.get("last_name", "")
+        phone      = personal.get("phone", "").replace("+57", "").replace(" ", "")
+        birth_date = personal.get("birth_date", "")
+        pp         = profile_data.get("professional_profile", {})
+        sal_min    = str(pp.get("salary_min") or 3000000)
+        sal_max    = str(pp.get("salary_max") or 5000000)
+
+        await fill_if_empty("input[placeholder*='Nombre' i]:not([placeholder*='Apellido' i])", first_name)
+        await fill_if_empty("input[placeholder*='Apellido' i]", last_name)
+        await fill_if_empty("input[type='email']", email)
+        await fill_if_empty("input[placeholder*='Teléfono' i], input[type='tel']", phone)
+        await fill_if_empty("input[placeholder*='Fecha' i], input[placeholder*='nacimiento' i]", birth_date)
+        await fill_if_empty("input[placeholder*='Entre']", sal_min)
+        await fill_if_empty("input[placeholder*='Bruto Mensual']", sal_max)
+
+        await log("✓ Campos requeridos llenados — formulario listo")
         return {"success": True, "url": self.page.url}
 
     async def dismiss_cookies(self) -> dict:
