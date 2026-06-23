@@ -48,18 +48,20 @@ PASO 2 - Expandir secciones colapsadas:
 - Repite para TODAS las secciones colapsadas antes de llenar cualquier campo
 
 PASO 3 - Llenar todos los campos:
-- Usa fill_input para cada campo con los datos del perfil
-- CAMPO CRITICO: "Salario deseado" -> usa el valor de professional_profile.salary_min
+- Usa get_form_structure para ver los selectores exactos de cada campo
+- Llena con fill_input todos los campos que tengan datos en el perfil
+- CAMPO CRITICO "Salario deseado":
+  * El campo con placeholder "Entre $ (Bruto mensual)" es salary_min
+  * El campo con placeholder "y $ (Bruto Mensual)" es salary_max
+  * Si salary_min es 0 o vacio en el perfil, usa 3000000 como valor por defecto
+  * Si salary_max es 0 o vacio, usa 5000000 como valor por defecto
+  * ESTE CAMPO ES OBLIGATORIO - sin el SIGUIENTE queda gris
 - Si hay checkboxes de terminos/privacidad ya marcados, no los toques
-- Si un campo es dropdown, usa select_option o click_text con el valor
+- Para dropdowns "Jornada" y "Tipo de contrato" usa select_option o click_text
 
-PASO 4 - Navegar paginas multiples:
-- Este formulario puede tener MULTIPLES PAGINAS
-- Despues de llenar todos los campos visibles, haz click_text("SIGUIENTE") o click_text("CONTINUAR")
-- En la pagina siguiente repite PASOS 1-3 hasta llenar todos los campos
-- Sigue hasta llegar al boton final: "Aplicar", "Enviar postulacion", "Postularme", "Enviar"
-- Haz clic en ese boton final para enviar la postulacion
-- Toma get_screenshot para confirmar el envio exitoso
+PASO 4 - Tu tarea termina cuando hayas llenado todos los campos visibles.
+NO necesitas hacer clic en SIGUIENTE - eso lo maneja el sistema automaticamente.
+Solo toma get_screenshot cuando termines de llenar.
 
 MAPEO DE CAMPOS:
 - Nombre / Primer nombre -> personal.first_name
@@ -72,7 +74,8 @@ MAPEO DE CAMPOS:
 - Pais -> personal.address.country
 - Titulo profesional -> professional_profile.title
 - Perfil / Resumen -> professional_profile.summary
-- Salario deseado -> professional_profile.salary_min (REQUERIDO - sin esto SIGUIENTE no funciona)
+- Entre $ Bruto mensual -> professional_profile.salary_min (default 3000000 si es 0)
+- y $ Bruto Mensual -> professional_profile.salary_max (default 5000000 si es 0)
 - Habilidades -> skills (lista separada por comas)
 - LinkedIn -> online.linkedin
 """
@@ -149,7 +152,7 @@ Estructura inicial del formulario:
             )
 
             if response.stop_reason == "end_turn":
-                await notify("Agente finalizo exitosamente.")
+                await notify("Agente termino de llenar campos.")
                 for block in response.content:
                     if hasattr(block, "text"):
                         await notify(f"RESUMEN:\n{block.text}")
@@ -162,7 +165,6 @@ Estructura inicial del formulario:
                         await notify(f"-> {block.name}")
                         result = await browser.execute_tool(block.name, block.input)
 
-                        # Enviar screenshot al frontend pero NO incluir el base64 en el historial
                         if block.name == "get_screenshot" and result.get("success"):
                             if screenshot_callback:
                                 await screenshot_callback(result["screenshot_base64"])
@@ -177,7 +179,33 @@ Estructura inicial del formulario:
                 messages.append({"role": "assistant", "content": response.content})
                 messages.append({"role": "user", "content": tool_results})
 
-        await notify("Formulario llenado. Revisa y envia manualmente.")
+        # ── Python hace clic en SIGUIENTE/Aplicar (no depende del AI) ─────────
+        await notify("Buscando boton SIGUIENTE para enviar postulacion...")
+        submitted = False
+        for btn_text in ["SIGUIENTE", "Siguiente", "APLICAR", "Aplicar", "Enviar postulacion", "Postularme"]:
+            try:
+                btn = browser.page.locator(f"button:has-text('{btn_text}'), input[value='{btn_text}']").first
+                if await btn.is_visible(timeout=2000) and await btn.is_enabled(timeout=1000):
+                    await btn.click()
+                    await browser.page.wait_for_timeout(3000)
+                    submitted = True
+                    await notify(f"✓ Clic en '{btn_text}'")
+                    break
+            except Exception:
+                pass
+
+        # Tomar screenshot final
+        sc = await browser.get_screenshot()
+        if sc.get("success") and screenshot_callback:
+            await screenshot_callback(sc["screenshot_base64"])
+
+        page_final = (await browser.get_page_text()).get("text", "")
+        if any(w in page_final.lower() for w in ["verificar", "verifica", "correo enviado", "candidatura"]):
+            await notify("✓ POSTULACION ENVIADA — revisa tu correo para verificar identidad")
+        elif submitted:
+            await notify("✓ Formulario enviado — verifica en Computrabajo > Mis postulaciones")
+        else:
+            await notify("Campos llenados — el boton SIGUIENTE estaba deshabilitado (verifica que todos los campos requeridos esten llenos)")
 
         if not update_callback:
             input("Presiona Enter para cerrar el navegador...")
