@@ -139,8 +139,11 @@ Al terminar, toma un screenshot con get_screenshot.
                         await notify(f"-> {block.name}")
                         result = await browser.execute_tool(block.name, block.input)
 
-                        if block.name == "get_screenshot" and result.get("success") and screenshot_callback:
-                            await screenshot_callback(result["screenshot_base64"])
+                        # Enviar screenshot al frontend pero NO incluir el base64 en el historial
+                        if block.name == "get_screenshot" and result.get("success"):
+                            if screenshot_callback:
+                                await screenshot_callback(result["screenshot_base64"])
+                            result = {"success": True, "message": "Screenshot capturado correctamente"}
 
                         tool_results.append({
                             "type": "tool_result",

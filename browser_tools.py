@@ -101,7 +101,7 @@ class BrowserAgent:
     
     async def get_page_text(self) -> dict:
         text = await self.page.inner_text("body")
-        return {"success": True, "text": text[:5000]}
+        return {"success": True, "text": text[:2000]}
     
     async def fill_date_field(self, selector: str, date: str) -> dict:
         try:
