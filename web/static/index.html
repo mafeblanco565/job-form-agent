@@ -310,21 +310,16 @@ async function detectMode() {
 async function checkSavedProfile() {
   try {
     const res = await fetch('/profile');
+    if (!res.ok) return;
     const data = await res.json();
     if (data.exists && data.profile) {
       extractedProfile = data.profile;
-      const p = data.profile.personal || {};
-      const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
-      document.getElementById('saved-profile-name').textContent =
-        name ? `${name} — ${p.email || ''}` : (p.email || 'Perfil disponible');
-      document.getElementById('saved-profile-banner').classList.remove('hidden');
+      renderProfile(data.profile, data.missing || []);
+      goToStep3();  // saltar directo al paso 3
     }
-  } catch { /* silencioso */ }
-}
-
-function useSavedProfile() {
-  renderProfile(extractedProfile, []);
-  goToStep3();
+  } catch (e) {
+    console.warn('No se pudo cargar perfil guardado:', e);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', () => {

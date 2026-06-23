@@ -4,6 +4,9 @@
 # Cliente oficial de Anthropic (Claude AI)
 anthropic>=0.40.0
 
+# Google Gemini (gratis para parsing de CV)
+google-generativeai>=0.8.0
+
 # Automatizacion del navegador
 playwright>=1.45.0
 

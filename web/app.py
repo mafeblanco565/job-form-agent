@@ -102,14 +102,7 @@ async def upload_cv(file: UploadFile = File(...)):
     if not full_text.strip():
         return JSONResponse({"error": "El archivo esta vacio o no tiene texto legible"}, status_code=400)
 
-    # Usar Claude Haiku para extraer el perfil estructurado
-    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-    response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=4096,
-        messages=[{
-            "role": "user",
-            "content": f"""Extrae la informacion del siguiente CV y devuelvela en formato JSON con esta estructura exacta.
+    prompt = f"""Extrae la informacion del siguiente CV y devuelvela en formato JSON con esta estructura exacta.
 Si un campo no esta en el CV, dejalo vacio ("") o 0 para numeros o [] para listas.
 Solo devuelve el JSON, sin explicaciones ni markdown.
 
@@ -156,12 +149,42 @@ Solo devuelve el JSON, sin explicaciones ni markdown.
 
 CV:
 {full_text}"""
-        }]
-    )
+
+    # Intentar con Gemini (gratis) primero, luego Claude como fallback
+    raw_text = None
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    if gemini_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            result = model.generate_content(prompt)
+            raw_text = result.text
+        except Exception as e:
+            raw_text = None
+
+    if raw_text is None and anthropic_key:
+        try:
+            client = AsyncAnthropic(api_key=anthropic_key)
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            raw_text = response.content[0].text
+        except Exception as e:
+            return JSONResponse({"error": f"Error de IA: {str(e)}"}, status_code=500)
+
+    if raw_text is None:
+        return JSONResponse(
+            {"error": "Configura GEMINI_API_KEY (gratis) o ANTHROPIC_API_KEY en el archivo .env"},
+            status_code=500
+        )
 
     try:
-        text = response.content[0].text.strip()
-        # Limpiar posible markdown
+        text = raw_text.strip()
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
