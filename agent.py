@@ -111,118 +111,31 @@ async def run_agent(
         await notify(f"Navegando a: {url}")
         await browser.navigate(url)
 
-        # Para Pandape/Computrabajo: navegar el flujo completo en Python (no el AI)
+        # Para Pandape/Computrabajo: ejecutar el flujo completo en Python (sin AI)
         if any(d in url.lower() for d in ["pandape", "computrabajo"]):
             nav = await browser.pandape_apply_flow(email=email, profile_data=profile, notify_fn=update_callback)
+
+            # Tomar screenshot siempre, sin importar el resultado
+            sc = await browser.get_screenshot()
+            if sc.get("success") and screenshot_callback:
+                await screenshot_callback(sc["screenshot_base64"])
+
             if not nav.get("success"):
                 await notify(f"Error en navegacion: {nav.get('error', 'desconocido')}")
-                await notify(f"Vista previa: {nav.get('page_preview', '')}")
                 return
 
-        form_structure = await browser.get_form_structure()
-        await notify(f"Campos en formulario: {len(form_structure)}")
+            if nav.get("submitted"):
+                # PASO 8 alcanzado — postulación enviada
+                await notify("✓ POSTULACION ENVIADA — revisa tu correo para verificar identidad y confirmar candidatura")
+                return
 
-        page_text_preview = (await browser.get_page_text()).get("text", "")[:800]
-
-        messages = [
-            {
-                "role": "user",
-                "content": f"""Estoy en el formulario de la oferta. Sigue los pasos del system prompt para llenarlo y enviarlo.
-
-URL actual: {browser.page.url}
-Campos detectados inicialmente: {len(form_structure)}
-IMPORTANTE: puede haber secciones colapsadas (acordeon) con mas campos adentro. Expande TODAS antes de llenar.
-
-Texto visible de la pagina:
-{page_text_preview}
-
-Estructura inicial del formulario:
-{json.dumps(form_structure, ensure_ascii=False, indent=2)}
-"""
-            }
-        ]
-
-        max_iterations = 25
-        for i in range(max_iterations):
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=4096,
-                system=build_system_prompt(profile, photo_path),
-                messages=messages,
-                tools=browser.get_tool_definitions()
-            )
-
-            if response.stop_reason == "end_turn":
-                await notify("Agente termino de llenar campos.")
-                for block in response.content:
-                    if hasattr(block, "text"):
-                        await notify(f"RESUMEN:\n{block.text}")
-                break
-
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        await notify(f"-> {block.name}")
-                        result = await browser.execute_tool(block.name, block.input)
-
-                        if block.name == "get_screenshot" and result.get("success"):
-                            if screenshot_callback:
-                                await screenshot_callback(result["screenshot_base64"])
-                            result = {"success": True, "message": "Screenshot capturado correctamente"}
-
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, ensure_ascii=False)
-                        })
-
-                messages.append({"role": "assistant", "content": response.content})
-                messages.append({"role": "user", "content": tool_results})
-
-        # ── Cerrar cualquier modal abierto (foto, dialogo, etc.) ──────────────
-        for modal_btn in ["Guardar", "Aceptar", "Cerrar", "Close"]:
-            try:
-                btn = browser.page.locator(f"button:has-text('{modal_btn}')").first
-                if await btn.is_visible(timeout=1500):
-                    await btn.click()
-                    await browser.page.wait_for_timeout(800)
-                    await notify(f"Modal cerrado: '{modal_btn}'")
-            except Exception:
-                pass
-
-        # ── Python hace clic en SIGUIENTE/Aplicar (no depende del AI) ─────────
-        await notify("Buscando boton SIGUIENTE para enviar postulacion...")
-        submitted = False
-        for btn_text in ["ENVIAR APLICACIÓN", "ENVIAR APLICACION", "SIGUIENTE", "Siguiente", "APLICAR", "Aplicar", "Enviar postulacion", "Postularme"]:
-            try:
-                btn = browser.page.locator(f"button:has-text('{btn_text}'), input[value='{btn_text}']").first
-                if await btn.is_visible(timeout=2000) and await btn.is_enabled(timeout=1000):
-                    await btn.click()
-                    # Esperar que cargue la pagina de verificacion/confirmacion
-                    try:
-                        await browser.page.wait_for_load_state("networkidle", timeout=10000)
-                    except Exception:
-                        pass
-                    await browser.page.wait_for_timeout(2000)
-                    submitted = True
-                    await notify(f"✓ Clic en '{btn_text}'")
-                    break
-            except Exception:
-                pass
-
-        # Tomar screenshot DESPUES de que cargue la pagina de confirmacion
-        sc = await browser.get_screenshot()
-        if sc.get("success") and screenshot_callback:
-            await screenshot_callback(sc["screenshot_base64"])
-
-        page_final = (await browser.get_page_text()).get("text", "")
-        if "enviamos un correo" in page_final.lower() or "verificar tu identidad" in page_final.lower():
-            await notify("✓ POSTULACION ENVIADA — revisa tu correo para verificar identidad y confirmar candidatura")
-        elif submitted:
-            await notify("SIGUIENTE presionado pero no llegó a confirmación — puede haber campos requeridos vacíos en el formulario")
-        else:
-            await notify("SIGUIENTE deshabilitado — el campo Salario u otro campo requerido está vacío")
+            # No se pudo enviar automáticamente — informar motivo
+            error_msg = nav.get("error", "")
+            if error_msg:
+                await notify(f"No se completó la postulación: {error_msg}")
+            else:
+                await notify("No se alcanzó la página de verificación. Verifica el formulario en el screenshot.")
+            return
 
         if not update_callback:
             input("Presiona Enter para cerrar el navegador...")

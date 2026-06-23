@@ -153,148 +153,201 @@ class BrowserAgent:
 
     async def pandape_apply_flow(self, email: str, profile_data: dict = None, notify_fn=None) -> dict:
         """
-        Navega el flujo completo de Pandape/Computrabajo hasta dejar el formulario listo.
-        Pasos: APLICAR A ESTE PROCESO → Redactar currículum → email → CV → formulario.
+        Ejecuta los 8 pasos completos del flujo Pandape en Python puro.
+        No depende del AI para ningún paso.
         """
         profile_data = profile_data or {}
         personal = profile_data.get("personal", {})
+        pp = profile_data.get("professional_profile", {})
+
+        first_name = personal.get("first_name", "")
+        last_name  = personal.get("last_name", "")
+        birth_date = personal.get("birth_date", "")
+        phone      = personal.get("phone", "").replace("+57", "").replace(" ", "").strip()
+        sal_min    = str(int(pp.get("salary_min") or 3000000))
+        sal_max    = str(int(pp.get("salary_max") or 5000000))
 
         async def log(msg):
             if notify_fn:
                 await notify_fn(msg)
 
-        # ── Paso 1: Cerrar cookies y hacer clic en APLICAR ─────────────────
-        await log("Buscando botón APLICAR A ESTE PROCESO...")
+        async def safe_fill(selector, value):
+            """Llena un campo si está visible y vacío."""
+            if not value:
+                return False
+            try:
+                el = self.page.locator(selector).first
+                if not await el.is_visible(timeout=2000):
+                    return False
+                current = await el.input_value()
+                if current.strip():
+                    return True  # ya tiene valor
+                await el.click()
+                await el.fill(value)
+                await self.page.wait_for_timeout(150)
+                return True
+            except Exception:
+                return False
+
+        async def safe_click(selector, timeout=3000):
+            try:
+                el = self.page.locator(selector).first
+                if await el.is_visible(timeout=timeout):
+                    await el.click()
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # ── PASO 3: Clic en APLICAR A ESTE PROCESO ─────────────────────────
+        await log("Paso 3: Clic en APLICAR A ESTE PROCESO...")
         await self._dismiss_cookies()
         await self.page.wait_for_timeout(800)
 
         clicked = False
-        for attempt in range(4):
-            try:
-                # Intentar con varios locators posibles
-                for loc in [
-                    self.page.get_by_text("APLICAR A ESTE PROCESO", exact=False).first,
-                    self.page.locator("button", has_text="APLICAR").first,
-                    self.page.locator("a", has_text="APLICAR").first,
-                ]:
+        for _ in range(3):
+            for loc in [
+                self.page.get_by_text("APLICAR A ESTE PROCESO", exact=False).first,
+                self.page.locator("button", has_text="APLICAR").first,
+            ]:
+                try:
                     if await loc.is_visible(timeout=2000):
                         await loc.click()
                         clicked = True
                         break
-                if clicked:
-                    break
-            except Exception:
-                await self.page.wait_for_timeout(600)
+                except Exception:
+                    pass
+            if clicked:
+                break
+            await self.page.wait_for_timeout(600)
 
         if not clicked:
-            page_text = await self.page.inner_text("body")
-            return {"success": False, "step": "apply_button",
-                    "error": "No se encontró el botón APLICAR A ESTE PROCESO",
-                    "page_preview": page_text[:300]}
+            return {"success": False, "step": "apply_button", "error": "No se encontró APLICAR A ESTE PROCESO"}
 
-        await log("✓ Clic en APLICAR A ESTE PROCESO — esperando dropdown...")
         await self.page.wait_for_timeout(1200)
 
-        # ── Paso 2: Elegir "Redactar currículum" del dropdown ───────────────
-        await log("Seleccionando Redactar currículum...")
-        redactar_clicked = False
-        for attempt in range(4):
+        # ── PASO 3b: Dropdown → Redactar currículum ─────────────────────────
+        for text in ["Redactar currículum", "Redactar curriculum"]:
             try:
-                for text in ["Redactar currículum", "Redactar curriculum", "Redactar"]:
-                    el = self.page.get_by_text(text, exact=False).first
-                    if await el.is_visible(timeout=2000):
-                        await el.click()
-                        redactar_clicked = True
-                        break
-                if redactar_clicked:
+                el = self.page.get_by_text(text, exact=False).first
+                if await el.is_visible(timeout=2000):
+                    await el.click()
+                    await log("✓ Redactar currículum seleccionado")
                     break
             except Exception:
-                await self.page.wait_for_timeout(600)
-
-        if not redactar_clicked:
-            # Si el dropdown no aparece, puede que el botón haya navegado directo
-            await log("Dropdown no visible — verificando página actual...")
-
+                pass
         await self.page.wait_for_timeout(2000)
 
-        # ── Paso 3: Manejar paso de correo electrónico ──────────────────────
+        # ── PASO 4: Correo electrónico + CONTINUAR ──────────────────────────
         page_text = await self.page.inner_text("body")
-        if any(w in page_text.lower() for w in ["correo", "email", "e-mail"]):
-            await log(f"Ingresando correo: {email}")
+        if "correo" in page_text.lower() or "email" in page_text.lower():
+            await log(f"Paso 4: Ingresando correo {email}...")
             try:
-                inp = self.page.locator(
-                    "input[type='email'], input[name*='mail' i], input[placeholder*='correo' i]"
-                ).first
+                inp = self.page.locator("input[type='email'], input[placeholder*='orreo' i]").first
                 await inp.wait_for(state="visible", timeout=5000)
                 await inp.fill(email)
-                await self.page.wait_for_timeout(400)
-                await self._click_visible("CONTINUAR", "Continuar", "SIGUIENTE", "Siguiente")
-                await self.page.wait_for_timeout(2000)
+                await self.page.wait_for_timeout(300)
+                await self._click_visible("CONTINUAR", "Continuar")
+                await self.page.wait_for_timeout(2500)
                 await log("✓ Correo ingresado")
             except Exception as e:
-                await log(f"Advertencia correo: {e}")
+                await log(f"Error correo: {e}")
 
-        # ── Paso 4: Manejar paso de CV si aparece ───────────────────────────
+        # ── PASO 5: CV → Incluir nuevo CV + CONTINUAR ───────────────────────
         page_text = await self.page.inner_text("body")
-        if any(w in page_text.lower() for w in ["nuevo cv", "encontramos tu cv", "subir cv"]):
-            await log("Manejando paso de CV...")
+        if "encontramos tu cv" in page_text.lower() or "nuevo cv" in page_text.lower():
+            await log("Paso 5: Seleccionando Incluir un nuevo CV...")
             try:
-                await self._click_visible("Incluir un nuevo CV", "nuevo CV", "sin CV")
+                # El radio "Incluir un nuevo CV" puede estar ya seleccionado
+                await self._click_visible("Incluir un nuevo CV", "nuevo CV")
                 await self.page.wait_for_timeout(500)
-                await self._click_visible("CONTINUAR", "Continuar", "SIGUIENTE")
-                await self.page.wait_for_timeout(2000)
+                await self._click_visible("CONTINUAR", "Continuar")
+                await self.page.wait_for_timeout(2500)
+                await log("✓ CV paso completado")
             except Exception as e:
-                await log(f"Advertencia CV: {e}")
+                await log(f"Error CV: {e}")
 
-        # ── Paso 5: Expandir TODAS las secciones colapsadas ────────────────
+        # ── PASO 6: Llenar Información personal ─────────────────────────────
         await self.page.wait_for_timeout(1000)
-        await log("Expandiendo secciones del formulario...")
-        for section in ["Habilidades", "Salario deseado", "Información adicional", "Experiencia", "Educación"]:
-            try:
-                el = self.page.get_by_text(section, exact=False).first
-                if await el.is_visible(timeout=1500):
-                    await el.click()
-                    await self.page.wait_for_timeout(600)
-            except Exception:
-                pass
+        await log("Paso 6: Llenando información personal...")
 
-        await self.page.wait_for_timeout(800)
+        await safe_fill('input[placeholder="Nombre"]', first_name)
+        await safe_fill('input[placeholder="Apellido"]', last_name)
 
-        # ── Paso 6: Llenar campos requeridos en Python (no el AI) ───────────
-        await log("Llenando campos requeridos...")
-
-        async def fill_if_empty(selector: str, value: str):
-            if not value:
-                return
-            try:
-                el = self.page.locator(selector).first
-                if await el.is_visible(timeout=1500):
-                    current = await el.input_value()
-                    if not current.strip():
+        # Fecha de nacimiento — intentar fill y luego type si falla
+        if birth_date:
+            filled = await safe_fill('input[placeholder="Fecha de nacimiento"]', birth_date)
+            if not filled:
+                try:
+                    el = self.page.locator('input[placeholder="Fecha de nacimiento"]').first
+                    if await el.is_visible(timeout=1500):
                         await el.click()
-                        await el.fill(value)
-                        await self.page.wait_for_timeout(200)
+                        await self.page.keyboard.type(birth_date, delay=80)
+                        await self.page.keyboard.press("Tab")
+                except Exception:
+                    pass
+
+        # Teléfono
+        if phone:
+            await safe_fill('input[placeholder*="Teléfono" i]', phone)
+            await safe_fill('input[placeholder*="Móvil" i]', phone)
+
+        await log("✓ Información personal llenada")
+
+        # ── PASO 7a: Expandir y llenar Salario deseado (REQUERIDO) ──────────
+        await log("Paso 7: Expandiendo y llenando Salario deseado...")
+        try:
+            sal_header = self.page.get_by_text("Salario deseado", exact=False).first
+            if await sal_header.is_visible(timeout=2000):
+                await sal_header.click()
+                await self.page.wait_for_timeout(800)
+        except Exception:
+            pass
+
+        await safe_fill('input[placeholder*="Entre"]', sal_min)
+        await safe_fill('input[placeholder*="Bruto Mensual" i]', sal_max)
+        await safe_fill('input[placeholder*="bruto mensual" i]', sal_max)
+        await self.page.wait_for_timeout(500)
+        await log(f"✓ Salario llenado: {sal_min} - {sal_max}")
+
+        # ── PASO 7b: Clic en ENVIAR APLICACIÓN ─────────────────────────────
+        await log("Paso 7: Buscando botón ENVIAR APLICACIÓN...")
+        await self.page.wait_for_timeout(1000)
+
+        enviar_clicked = False
+        for btn_text in ["ENVIAR APLICACIÓN", "ENVIAR APLICACION", "Enviar aplicación"]:
+            try:
+                btn = self.page.get_by_text(btn_text, exact=False).first
+                if await btn.is_visible(timeout=2000):
+                    is_enabled = await btn.is_enabled(timeout=1000)
+                    if is_enabled:
+                        await btn.click()
+                        enviar_clicked = True
+                        await log(f"✓ Clic en '{btn_text}'")
+                        break
+                    else:
+                        await log(f"Botón '{btn_text}' visible pero deshabilitado — campos requeridos incompletos")
             except Exception:
                 pass
 
-        first_name = personal.get("first_name", "")
-        last_name  = personal.get("last_name", "")
-        phone      = personal.get("phone", "").replace("+57", "").replace(" ", "")
-        birth_date = personal.get("birth_date", "")
-        pp         = profile_data.get("professional_profile", {})
-        sal_min    = str(pp.get("salary_min") or 3000000)
-        sal_max    = str(pp.get("salary_max") or 5000000)
+        if not enviar_clicked:
+            return {"success": True, "submitted": False,
+                    "error": "ENVIAR APLICACIÓN deshabilitado — verifica Nombre, Apellido o Salario"}
 
-        await fill_if_empty("input[placeholder*='Nombre' i]:not([placeholder*='Apellido' i])", first_name)
-        await fill_if_empty("input[placeholder*='Apellido' i]", last_name)
-        await fill_if_empty("input[type='email']", email)
-        await fill_if_empty("input[placeholder*='Teléfono' i], input[type='tel']", phone)
-        await fill_if_empty("input[placeholder*='Fecha' i], input[placeholder*='nacimiento' i]", birth_date)
-        await fill_if_empty("input[placeholder*='Entre']", sal_min)
-        await fill_if_empty("input[placeholder*='Bruto Mensual']", sal_max)
+        # ── PASO 8: Esperar página de verificación ──────────────────────────
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        await self.page.wait_for_timeout(2000)
 
-        await log("✓ Campos requeridos llenados — formulario listo")
-        return {"success": True, "url": self.page.url}
+        page_text = await self.page.inner_text("body")
+        if "verificar tu identidad" in page_text.lower() or "enviamos un correo" in page_text.lower():
+            await log("✓ PASO 8: POSTULACION ENVIADA — revisa tu correo para verificar identidad")
+            return {"success": True, "submitted": True}
+        else:
+            await log("ENVIAR presionado pero no apareció página de verificación — puede haber error en el formulario")
+            return {"success": True, "submitted": False}
 
     async def dismiss_cookies(self) -> dict:
         await self._dismiss_cookies()
