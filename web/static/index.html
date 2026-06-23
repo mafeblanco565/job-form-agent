@@ -111,6 +111,20 @@
         </button>
 
         <div id="cv-error" class="hidden mt-3 text-red-500 text-sm text-center"></div>
+
+        <!-- Perfil previo detectado -->
+        <div id="saved-profile-banner" class="hidden mt-4 p-4 bg-green-50 border border-green-200 rounded-xl">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-green-800 font-semibold text-sm">✓ Tienes un perfil guardado</p>
+              <p class="text-green-600 text-xs mt-0.5" id="saved-profile-name"></p>
+            </div>
+            <button onclick="useSavedProfile()"
+                    class="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 transition-colors">
+              Usar perfil guardado
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -279,7 +293,7 @@ let extractedProfile = null;
 let selectedFile = null;
 let isRailway = false;
 
-// Detecta si corre en Railway o local y adapta la UI
+// Detecta modo Railway y perfil guardado al cargar
 async function detectMode() {
   try {
     const res = await fetch('/mode');
@@ -293,7 +307,30 @@ async function detectMode() {
   }
 }
 
-document.addEventListener('DOMContentLoaded', detectMode);
+async function checkSavedProfile() {
+  try {
+    const res = await fetch('/profile');
+    const data = await res.json();
+    if (data.exists && data.profile) {
+      extractedProfile = data.profile;
+      const p = data.profile.personal || {};
+      const name = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+      document.getElementById('saved-profile-name').textContent =
+        name ? `${name} — ${p.email || ''}` : (p.email || 'Perfil disponible');
+      document.getElementById('saved-profile-banner').classList.remove('hidden');
+    }
+  } catch { /* silencioso */ }
+}
+
+function useSavedProfile() {
+  renderProfile(extractedProfile, []);
+  goToStep3();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  detectMode();
+  checkSavedProfile();
+});
 
 // ── Drag & drop ──────────────────────────────────────────
 const dropZone = document.getElementById('drop-zone');

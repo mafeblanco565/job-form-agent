@@ -55,6 +55,22 @@ async def get_mode():
     return {"mode": "railway" if is_railway else "local"}
 
 
+# ─── Perfil guardado ──────────────────────────────────────────────────────────
+
+@app.get("/profile")
+async def get_saved_profile():
+    """Devuelve el perfil guardado si existe, sin llamar a la API de Claude."""
+    profile_path = UPLOADS_DIR / "profile_extracted.json"
+    if not profile_path.exists():
+        return JSONResponse({"exists": False})
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        missing = _evaluate_missing_fields(profile)
+        return {"exists": True, "profile": profile, "missing": missing}
+    except Exception as e:
+        return JSONResponse({"exists": False, "error": str(e)})
+
+
 # ─── Screenshot ───────────────────────────────────────────────────────────────
 
 @app.get("/screenshot")
