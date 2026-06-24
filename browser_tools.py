@@ -472,12 +472,62 @@ class BrowserAgent:
         await fill_vuetify_select("Género", "Mujer")
         await fill_vuetify_select("País",   "Colombia")
 
-        # Código postal — solo si el label es visible (no bloquear si no existe)
+        # Código postal — Vuetify autocomplete: clic → escribir → esperar filtro → elegir opción
         try:
-            if await self.page.locator("label", has_text="Código postal").first.is_visible(timeout=1500):
-                await fill_vuetify_select("Código postal", "Bucaramanga")
-        except Exception:
-            pass
+            postal_label = self.page.locator("label", has_text="Código postal").first
+            if await postal_label.is_visible(timeout=1500):
+                await log("  Código postal: abriendo autocomplete...")
+                # Abrir: clic en el input asociado al label (sube al contenedor v-autocomplete)
+                opened = await self.page.evaluate("""
+                    () => {
+                        for (const lbl of document.querySelectorAll('label')) {
+                            if (lbl.innerText.toLowerCase().includes('código postal') || lbl.innerText.toLowerCase().includes('codigo postal')) {
+                                const cont = lbl.closest('.v-autocomplete, .v-select, .v-input');
+                                if (cont) {
+                                    const inp = cont.querySelector('input');
+                                    if (inp) { inp.focus(); inp.click(); }
+                                    cont.click();
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+                """)
+                if opened:
+                    await self.page.wait_for_timeout(600)
+                    # Escribir "Bucaramanga" en el input activo (el de búsqueda del autocomplete)
+                    await self.page.keyboard.type("Bucaramanga", delay=80)
+                    await log("  Código postal: escribiendo 'Bucaramanga', esperando filtro...")
+                    await self.page.wait_for_timeout(2500)   # filtrado asíncrono del servidor
+                    # Elegir primera opción del menú abierto
+                    chosen = False
+                    for opt_sel in [
+                        ".v-menu__content .v-list-item:not(.v-list-item--disabled)",
+                        ".menuable__content__active .v-list-item",
+                        "div[role='option']",
+                    ]:
+                        try:
+                            opt = self.page.locator(opt_sel).first
+                            if await opt.is_visible(timeout=2000):
+                                await opt.click()
+                                chosen = True
+                                txt = (await opt.inner_text())[:30]
+                                await log(f"  ✓ Código postal: {txt}")
+                                break
+                        except Exception:
+                            pass
+                    if not chosen:
+                        # fallback: bajar con flecha y Enter
+                        await self.page.keyboard.press("ArrowDown")
+                        await self.page.wait_for_timeout(300)
+                        await self.page.keyboard.press("Enter")
+                        await log("  Código postal: selección por teclado (ArrowDown+Enter)")
+                    await self.page.wait_for_timeout(400)
+                else:
+                    await log("  ✗ Código postal: no se pudo abrir el autocomplete")
+        except Exception as e:
+            await log(f"  ✗ Código postal: {e}")
 
         # Perfil profesional (accordion)
         pp_title = profile_data.get("professional_profile", {}).get("title", "")
@@ -497,41 +547,108 @@ class BrowserAgent:
 
         await log("✓ Información personal y perfil llenados")
 
-        # ── PASO 6b: Experiencia (primer registro) ──────────────────────────
+        async def open_accordion_form(add_button_texts):
+            """Hace clic en el botón '+ Incluir X' para abrir el sub-formulario."""
+            for t in add_button_texts:
+                try:
+                    b = self.page.get_by_role("button", name=t, exact=False).first
+                    if not await b.is_visible(timeout=1500):
+                        b = self.page.get_by_text(t, exact=False).first
+                    if await b.is_visible(timeout=1500):
+                        await b.scroll_into_view_if_needed()
+                        await b.click()
+                        await self.page.wait_for_timeout(1000)
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        async def click_save_incluir():
+            """Hace clic en el botón 'Incluir' (guardar) del sub-formulario abierto."""
+            for getter in [
+                lambda: self.page.get_by_role("button", name="Incluir", exact=True).last,
+                lambda: self.page.locator("button", has_text="Incluir").last,
+            ]:
+                try:
+                    b = getter()
+                    if await b.is_visible(timeout=1500) and await b.is_enabled(timeout=1000):
+                        await b.scroll_into_view_if_needed()
+                        await b.click()
+                        await self.page.wait_for_timeout(900)
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        async def cancel_subform():
+            """Cierra un sub-formulario abierto vía 'Cancelar' para no bloquear el envío."""
+            try:
+                b = self.page.get_by_role("button", name="Cancelar", exact=True).last
+                if await b.is_visible(timeout=1500):
+                    await b.click()
+                    await self.page.wait_for_timeout(600)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        async def select_in_subform(label_text, option_text):
+            """Selecciona una opción en un <select> nativo o v-select dentro del sub-form."""
+            # 1. intentar <select> nativo cuyas opciones contengan el texto buscado
+            try:
+                native = self.page.locator("select")
+                count = await native.count()
+                for i in range(count):
+                    s = native.nth(i)
+                    if not await s.is_visible():
+                        continue
+                    opts = await s.evaluate("el => [...el.options].map(o => o.text)")
+                    if any(option_text.lower() in (o or '').lower() for o in opts):
+                        await s.select_option(label=[o for o in opts if option_text.lower() in o.lower()][0])
+                        await log(f"    ✓ {label_text}: {option_text}")
+                        return True
+            except Exception:
+                pass
+            # 2. v-select Vuetify
+            return await fill_vuetify_select(label_text, option_text)
+
+        # DIAGNÓSTICO: volcar todos los botones visibles antes de las secciones
+        botones = await self.page.evaluate("""
+            () => [...document.querySelectorAll('button')]
+                .filter(b => b.offsetParent !== null)
+                .map(b => (b.innerText || '').trim())
+                .filter(t => t.length > 0 && t.length < 50)
+        """)
+        await log(f"🔘 Botones visibles en la página: {botones}")
+
+        # ── PASO 6b: Experiencia profesional ────────────────────────────────
         experiences = profile_data.get("experience", [])
+        await log(f"Paso 6b: experiencias en perfil = {len(experiences)}")
         if experiences:
             exp = experiences[0]
-            await log("Paso 6b: Agregando experiencia laboral...")
+            await log("Paso 6b: Agregando experiencia profesional...")
             try:
-                btn = self.page.get_by_text("Incluir experiencia", exact=False).first
-                if await btn.is_visible(timeout=3000):
-                    await btn.click()
-                    await self.page.wait_for_timeout(1000)
-                    sub = self.page.get_by_text("Incluir", exact=True).first
-                    if await sub.is_visible(timeout=2000):
-                        await sub.click()
-                        await self.page.wait_for_timeout(1200)
+                if await open_accordion_form(["+ Incluir experiencia", "Incluir experiencia"]):
                     await fill_input("Posición", exp.get("position", ""))
                     await fill_input("Empresa", exp.get("company", ""))
-                    await fill_input("Descripción", exp.get("description", ""))
-                    start = exp.get("start_date", "")
-                    if start:
-                        await fill_input("Fecha de inicio", start)
+                    await select_in_subform("Área", exp.get("area", "Ventas"))
+                    await fill_input("Fecha de inicio", exp.get("start_date_input", "01/03/2026"))
                     if exp.get("current"):
                         try:
-                            cb = self.page.locator("input[type='checkbox']").filter(
-                                has=self.page.get_by_text("Actualmente", exact=False)
-                            ).first
-                            if not await cb.is_visible(timeout=1000):
-                                cb = self.page.get_by_label("Actualmente", exact=False).first
-                            await cb.check()
+                            await self.page.get_by_text("Actualmente trabajo aquí", exact=False).first.click()
+                            await log("    ✓ Actualmente trabajo aquí")
                         except Exception:
                             pass
-                    confirm = self.page.get_by_text("Incluir", exact=True).last
-                    if await confirm.is_visible(timeout=2000):
-                        await confirm.click()
-                        await self.page.wait_for_timeout(800)
+                    else:
+                        await fill_input("Fecha de finalización", exp.get("end_date_input", ""))
+                    await fill_input("Descripción", exp.get("description", ""))
+                    if await click_save_incluir():
                         await log("  ✓ Experiencia incluida")
+                    else:
+                        await cancel_subform()
+                        await log("  ✗ Experiencia: no se pudo guardar → cancelada")
+                else:
+                    await log("  ✗ No se encontró '+ Incluir experiencia'")
             except Exception as e:
                 await log(f"  ✗ Experiencia: {e}")
 
@@ -541,68 +658,84 @@ class BrowserAgent:
             edu = educations[0]
             await log("Paso 6c: Agregando educación...")
             try:
-                btn = self.page.get_by_text("Incluir formación académica", exact=False).first
-                if not await btn.is_visible(timeout=2000):
-                    btn = self.page.get_by_text("formación académica", exact=False).first
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await self.page.wait_for_timeout(1000)
-                    sub = self.page.get_by_text("Incluir", exact=True).first
-                    if await sub.is_visible(timeout=2000):
-                        await sub.click()
-                        await self.page.wait_for_timeout(1200)
+                if await open_accordion_form(["+ Incluir formación académica", "Incluir formación académica"]):
                     await fill_input("Curso", edu.get("degree", ""))
                     await fill_input("Institución", edu.get("institution", ""))
-                    await fill_input("Fecha inicio", edu.get("start_date", ""))
-                    await fill_input("Fecha fin", edu.get("end_date", ""))
-                    level = edu.get("level", "")
-                    if level:
-                        try:
-                            sel = self.page.locator("select").filter(
-                                has=self.page.get_by_text("Universidad", exact=False)
-                            ).first
-                            await sel.select_option(label=level)
-                        except Exception:
-                            pass
-                    confirm = self.page.get_by_text("Incluir", exact=True).last
-                    if await confirm.is_visible(timeout=2000):
-                        await confirm.click()
-                        await self.page.wait_for_timeout(800)
+                    await select_in_subform("Nivel", edu.get("level", "Universidad"))
+                    await fill_input("Fecha de inicio", edu.get("start_date", ""))
+                    await fill_input("Fecha de finalización", edu.get("end_date", ""))
+                    # Estado "Concluido" ya viene seleccionado por defecto (radio)
+                    if await click_save_incluir():
                         await log("  ✓ Educación incluida")
+                    else:
+                        await cancel_subform()
+                        await log("  ✗ Educación: no se pudo guardar → cancelada")
+                else:
+                    await log("  ✗ No se encontró '+ Incluir formación académica'")
             except Exception as e:
                 await log(f"  ✗ Educación: {e}")
 
-        # ── PASO 6d: Idiomas ────────────────────────────────────────────────
+        # ── PASO 6d: Cursos y Certificaciones ───────────────────────────────
+        courses = profile_data.get("courses", [])
+        if courses:
+            course = courses[0]
+            await log("Paso 6d: Agregando curso/certificación...")
+            try:
+                if await open_accordion_form(["+ Incluir curso o certificación", "Incluir curso o certificación"]):
+                    await fill_input("Nombre o título", course.get("name", ""))
+                    await fill_input("Centro", course.get("institution", ""))
+                    if await click_save_incluir():
+                        await log("  ✓ Curso incluido")
+                    else:
+                        await cancel_subform()
+                        await log("  ✗ Curso: no se pudo guardar → cancelado")
+            except Exception as e:
+                await log(f"  ✗ Curso: {e}")
+
+        # ── PASO 6e: Idiomas ────────────────────────────────────────────────
         languages = profile_data.get("languages", [])
         if languages:
             lang = languages[0]
-            await log("Paso 6d: Agregando idioma...")
+            await log("Paso 6e: Agregando idioma...")
             try:
-                btn = self.page.get_by_text("Incluir idioma", exact=False).first
-                if await btn.is_visible(timeout=2000):
-                    await btn.click()
-                    await self.page.wait_for_timeout(1000)
-                    sub = self.page.get_by_text("Incluir", exact=True).first
-                    if await sub.is_visible(timeout=2000):
-                        await sub.click()
-                        await self.page.wait_for_timeout(1200)
-                    idioma = lang.get("language", "Inglés")
-                    nivel  = lang.get("level", "Intermedio")
-                    try:
-                        sels = self.page.locator("select")
-                        cnt = await sels.count()
-                        if cnt >= 2:
-                            await sels.nth(0).select_option(label=idioma)
-                            await sels.nth(1).select_option(label=nivel)
-                    except Exception:
-                        pass
-                    confirm = self.page.get_by_text("Incluir", exact=True).last
-                    if await confirm.is_visible(timeout=2000):
-                        await confirm.click()
-                        await self.page.wait_for_timeout(800)
+                if await open_accordion_form(["+ Incluir idioma", "Incluir idioma"]):
+                    await select_in_subform("Idioma", lang.get("language", "Inglés"))
+                    await select_in_subform("Nivel", lang.get("level", "Intermedio"))
+                    if await click_save_incluir():
                         await log("  ✓ Idioma incluido")
+                    else:
+                        await cancel_subform()
+                        await log("  ✗ Idioma: no se pudo guardar → cancelado")
+                else:
+                    await log("  ✗ No se encontró '+ Incluir idioma'")
             except Exception as e:
                 await log(f"  ✗ Idioma: {e}")
+
+        # ── PASO 6f: Habilidades (input con búsqueda + botón Incluir inline) ──
+        skills = profile_data.get("skills", [])
+        if skills:
+            await log("Paso 6f: Agregando habilidades...")
+            added = 0
+            for skill in skills[:5]:   # primeras 5 habilidades
+                try:
+                    inp = self.page.get_by_placeholder("Habilidad de búsqueda", exact=False).first
+                    if await inp.is_visible(timeout=1500):
+                        await inp.click()
+                        await inp.fill(skill)
+                        await self.page.wait_for_timeout(1500)   # esperar sugerencias
+                        # elegir sugerencia del dropdown si aparece, si no, click Incluir
+                        opt = self.page.locator(".v-list-item, div[role='option']").filter(has_text=skill).first
+                        if await opt.is_visible(timeout=1500):
+                            await opt.click()
+                        else:
+                            btn = self.page.get_by_role("button", name="Incluir", exact=True).last
+                            if await btn.is_visible(timeout=1000):
+                                await btn.click()
+                        await self.page.wait_for_timeout(500)
+                        added += 1
+                except Exception:
+                    pass
+            await log(f"  ✓ Habilidades agregadas: {added}")
 
         # ── PASO 7a: Salario deseado (REQUERIDO) ────────────────────────────
         await log("Paso 7: Llenando Salario deseado...")
@@ -714,35 +847,180 @@ class BrowserAgent:
         except Exception:
             pass
 
-        # ── PASO 7c: Clic en ENVIAR APLICACIÓN ─────────────────────────────
-        await log("Paso 7: Buscando botón ENVIAR APLICACIÓN...")
+        # ── PASO 7c: DIAGNÓSTICO de validación + clic en ENVIAR APLICACIÓN ──
         await self.page.wait_for_timeout(1000)
 
+        async def diagnose_validation():
+            """Lee el estado real de validación de Vuetify: campos en error y mensajes."""
+            return await self.page.evaluate("""
+                () => {
+                    const result = {invalid_fields: [], messages: [], submit_disabled: null};
+                    // 1. Campos Vuetify en estado de error (clase error--text en .v-input)
+                    document.querySelectorAll('.v-input.error--text, .v-input--has-state.error--text').forEach(el => {
+                        const lbl = el.querySelector('label');
+                        result.invalid_fields.push(lbl ? lbl.innerText.trim() : el.className.substring(0,40));
+                    });
+                    // 2. Mensajes de validación visibles
+                    document.querySelectorAll('.v-messages__message, .error--text .v-messages__message').forEach(m => {
+                        const t = (m.innerText || '').trim();
+                        if (t) result.messages.push(t);
+                    });
+                    // 3. Estado del botón submit real (<button> que contiene ENVIAR)
+                    for (const b of document.querySelectorAll('button')) {
+                        if ((b.innerText || '').toUpperCase().includes('ENVIAR')) {
+                            result.submit_disabled = b.disabled || b.classList.contains('v-btn--disabled');
+                            break;
+                        }
+                    }
+                    // 4. Campos requeridos vacíos (inputs con * en el label y sin valor)
+                    document.querySelectorAll('input,textarea,select').forEach(el => {
+                        if (el.offsetParent === null) return;
+                        let lbl = '';
+                        if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]'); if(l) lbl=l.innerText.trim(); }
+                        if (!lbl) { const p=el.closest('.v-input__slot,.v-text-field__slot,div'); if(p){const l=p.querySelector('label');if(l)lbl=l.innerText.trim();}}
+                        const isRequired = lbl.includes('*') || (el.required === true);
+                        const isEmpty = !el.value || !el.value.trim();
+                        if (isRequired && isEmpty) result.invalid_fields.push('VACÍO REQUERIDO: ' + lbl);
+                    });
+                    return result;
+                }
+            """)
+
+        diag = await diagnose_validation()
+        await log(f"🔍 DIAGNÓSTICO — botón submit deshabilitado: {diag.get('submit_disabled')}")
+        if diag.get("invalid_fields"):
+            await log(f"🔍 Campos inválidos/vacíos: {diag['invalid_fields']}")
+        if diag.get("messages"):
+            await log(f"🔍 Mensajes de validación: {diag['messages']}")
+        if not diag.get("invalid_fields") and not diag.get("messages"):
+            await log("🔍 Vuetify no reporta campos inválidos (validación puede estar en otro nivel)")
+
+        # ── Verificar que los 2 checkboxes "Acepto" estén marcados (habilitan SIGUIENTE) ──
+        cbk = await self.page.evaluate("""
+            () => {
+                let total = 0, checked = 0;
+                for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
+                    const p = cb.closest('div');
+                    const txt = (p && p.innerText || '').trim();
+                    if (txt.startsWith('Acepto')) {
+                        total++;
+                        if (!cb.checked) {
+                            // click en el control Vuetify (no solo el input) para registrar en Vue
+                            const ripple = cb.closest('.v-input--selection-controls__input, .v-input__slot');
+                            (ripple || cb).click();
+                        }
+                        if (cb.checked) checked++;
+                    }
+                }
+                // re-contar tras los clicks
+                checked = 0;
+                for (const cb of document.querySelectorAll('input[type="checkbox"]')) {
+                    const p = cb.closest('div');
+                    const txt = (p && p.innerText || '').trim();
+                    if (txt.startsWith('Acepto') && cb.checked) checked++;
+                }
+                return {total, checked};
+            }
+        """)
+        await log(f"🔍 Checkboxes Acepto: {cbk['checked']}/{cbk['total']} marcados")
+
+        # DIAGNÓSTICO PROFUNDO: estado real del botón SIGUIENTE + campos requeridos vacíos
+        deep = await self.page.evaluate("""
+            () => {
+                const out = {boton: null, requeridos_vacios: [], errores: []};
+                // Botón SIGUIENTE (o ENVIAR como fallback)
+                for (const b of document.querySelectorAll('button')) {
+                    const t = (b.innerText || '').toUpperCase().trim();
+                    if (t.includes('SIGUIENTE') || t.includes('ENVIAR') || t.includes('APLICA')) {
+                        out.boton = {
+                            txt: t.substring(0,25),
+                            disabled: b.disabled || b.classList.contains('v-btn--disabled'),
+                            cls: (b.className||'').toString().substring(0,50)
+                        };
+                        break;
+                    }
+                }
+                // Mensajes de error visibles (rojo) tipo "X es obligatorio"
+                document.querySelectorAll('.v-messages__message, .error--text').forEach(m => {
+                    const t = (m.innerText||'').trim();
+                    if (t && (t.toLowerCase().includes('obligat') || t.toLowerCase().includes('requ'))) {
+                        if (!out.errores.includes(t)) out.errores.push(t);
+                    }
+                });
+                // Inputs/selects requeridos visibles que siguen vacíos
+                document.querySelectorAll('input,select').forEach(el => {
+                    if (el.offsetParent === null) return;
+                    if (el.type === 'checkbox' || el.type === 'radio') return;
+                    let lbl = '';
+                    if (el.id) { const l=document.querySelector('label[for="'+el.id+'"]'); if(l) lbl=l.innerText.trim(); }
+                    if (!lbl) { const p=el.closest('.v-input__slot,.v-text-field__slot,div'); if(p){const l=p.querySelector('label'); if(l) lbl=l.innerText.trim();}}
+                    const empty = !el.value || !el.value.trim() || el.value === 'Seleccione';
+                    // marcar como sospechoso si está vacío y NO dice opcional
+                    if (empty && lbl && !lbl.toLowerCase().includes('opcional') && !lbl.toLowerCase().includes('skype') && !lbl.toLowerCase().includes('complemento') && !lbl.toLowerCase().includes('número')) {
+                        out.requeridos_vacios.push(lbl.substring(0,30) + '=' + (el.value||'<vacío>'));
+                    }
+                });
+                return out;
+            }
+        """)
+        await log(f"🔬 Botón submit: {deep.get('boton')}")
+        if deep.get("errores"):
+            await log(f"🔬 Errores visibles: {deep['errores']}")
+        if deep.get("requeridos_vacios"):
+            await log(f"🔬 Campos aún vacíos: {deep['requeridos_vacios']}")
+
+        # ── Clic en SIGUIENTE ───────────────────────────────────────────────
+        await log("Paso 7: Buscando botón SIGUIENTE...")
         enviar_clicked = False
-        for btn_text in ["ENVIAR APLICACIÓN", "ENVIAR APLICACION", "Enviar aplicación"]:
+        btn = None
+        for sel in [
+            "button:has-text('SIGUIENTE')",
+            "button:has-text('Siguiente')",
+            "button:has-text('ENVIAR APLICACIÓN')",
+            "button:has-text('ENVIAR')",
+        ]:
             try:
-                btn = self.page.get_by_text(btn_text, exact=False).first
-                if await btn.is_visible(timeout=2000):
-                    is_enabled = await btn.is_enabled(timeout=1000)
-                    if is_enabled:
-                        await btn.click()
-                        enviar_clicked = True
-                        await log(f"✓ Clic en '{btn_text}'")
-                        break
-                    else:
-                        await log(f"⚠ '{btn_text}' deshabilitado aún — esperando 2s e intentando de nuevo...")
-                        await self.page.wait_for_timeout(2000)
-                        if await btn.is_enabled(timeout=1000):
-                            await btn.click()
-                            enviar_clicked = True
-                            await log(f"✓ Clic en '{btn_text}' (2do intento)")
-                            break
+                cand = self.page.locator(sel).first
+                if await cand.is_visible(timeout=1500):
+                    btn = cand
+                    await log(f"  Botón encontrado con selector: {sel}")
+                    break
             except Exception:
                 pass
 
+        if btn is not None:
+            try:
+                if await btn.is_enabled(timeout=1000):
+                    await btn.scroll_into_view_if_needed()
+                    await btn.click()
+                    enviar_clicked = True
+                    await log("✓ Clic en SIGUIENTE")
+                else:
+                    await log("⚠ SIGUIENTE deshabilitado — esperando 2s y reintentando...")
+                    await self.page.wait_for_timeout(2000)
+                    if await btn.is_enabled(timeout=1000):
+                        await btn.scroll_into_view_if_needed()
+                        await btn.click()
+                        enviar_clicked = True
+                        await log("✓ Clic en SIGUIENTE (2do intento)")
+            except Exception as e:
+                await log(f"✗ Error al clicar SIGUIENTE: {e}")
+        else:
+            await log("✗ No se encontró ningún botón SIGUIENTE/ENVIAR")
+
         if not enviar_clicked:
+            boton = deep.get("boton") or {}
+            vacios = deep.get("requeridos_vacios") or []
+            errores = deep.get("errores") or []
+            detail = ""
+            if boton.get("disabled"):
+                detail = " El botón está deshabilitado (gris)."
+            if errores:
+                detail += f" Errores: {errores}"
+            if vacios:
+                detail += f" Campos vacíos: {vacios}"
             return {"success": True, "submitted": False,
-                    "error": "ENVIAR APLICACIÓN deshabilitado — verifica salario y campos requeridos"}
+                    "error": f"SIGUIENTE no se pudo clicar.{detail}"}
 
         # ── PASO 8: Esperar página de verificación (pantalla blanca transitoria ~8-10s) ──
         await log("Paso 8: Esperando página de verificación...")
