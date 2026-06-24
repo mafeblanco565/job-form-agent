@@ -151,6 +151,163 @@ class BrowserAgent:
                 pass
         return False
 
+    async def _fill_codigo_postal(self, query: str, log) -> bool:
+        """
+        Llena el campo Código postal sin asumir framework (Vuetify/Bootstrap/select2).
+        1) Vuelca la estructura real del campo
+        2) Prueba: native <select>, select2/Chosen, autocomplete genérico
+        """
+        # 1) Diagnóstico de estructura
+        info = await self.page.evaluate("""
+            () => {
+                let target = null;
+                for (const lbl of document.querySelectorAll('label')) {
+                    const t = lbl.innerText.toLowerCase();
+                    if (t.includes('código postal') || t.includes('codigo postal')) {
+                        // elemento de control asociado
+                        let ctrl = null;
+                        if (lbl.htmlFor) ctrl = document.getElementById(lbl.htmlFor);
+                        const cont = lbl.closest('div');
+                        target = {
+                            labelText: lbl.innerText.trim(),
+                            ctrlTag: ctrl ? ctrl.tagName : null,
+                            ctrlType: ctrl ? ctrl.type : null,
+                            contHTML: cont ? cont.outerHTML.substring(0, 400) : null
+                        };
+                        break;
+                    }
+                }
+                return target;
+            }
+        """)
+        if not info:
+            await log("  ⚠ Código postal: no existe en este formulario (omitido)")
+            return False
+        await log(f"  🔬 Código postal estructura: ctrl={info.get('ctrlTag')}/{info.get('ctrlType')}")
+
+        # 2a) ¿Es un <select> nativo? Intentar seleccionar opción que contenga la query
+        try:
+            done = await self.page.evaluate("""
+                (q) => {
+                    for (const lbl of document.querySelectorAll('label')) {
+                        const t = lbl.innerText.toLowerCase();
+                        if (t.includes('código postal') || t.includes('codigo postal')) {
+                            const cont = lbl.closest('div');
+                            const sel = cont && cont.querySelector('select');
+                            if (sel) {
+                                for (const o of sel.options) {
+                                    if ((o.text||'').toLowerCase().includes(q.toLowerCase())) {
+                                        sel.value = o.value;
+                                        sel.dispatchEvent(new Event('change', {bubbles:true}));
+                                        return o.text;
+                                    }
+                                }
+                                return '__SELECT_SIN_OPCION__';
+                            }
+                        }
+                    }
+                    return null;
+                }
+            """, query)
+            if done and done != "__SELECT_SIN_OPCION__":
+                await log(f"  ✓ Código postal (select nativo): {done}")
+                return True
+        except Exception:
+            pass
+
+        # 2b) select2 / Chosen / custom: clic en el contenedor visible, escribir, elegir
+        try:
+            # Clic en el control: el <input> asociado o el contenedor select2
+            opened = await self.page.evaluate("""
+                () => {
+                    for (const lbl of document.querySelectorAll('label')) {
+                        const t = lbl.innerText.toLowerCase();
+                        if (t.includes('código postal') || t.includes('codigo postal')) {
+                            const cont = lbl.closest('div');
+                            if (!cont) return false;
+                            // select2 container
+                            const s2 = cont.querySelector('.select2-selection, .select2-container, .chosen-container');
+                            if (s2) { s2.click(); return 'select2'; }
+                            // input de texto
+                            const inp = cont.querySelector('input:not([type=hidden])');
+                            if (inp) { inp.focus(); inp.click(); return 'input'; }
+                            // cualquier elemento clicable
+                            cont.click(); return 'div';
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if not opened:
+                await log("  ✗ Código postal: no se pudo enfocar el control")
+                return False
+            await log(f"  Código postal: control abierto ({opened}), escribiendo '{query}'...")
+            await self.page.wait_for_timeout(500)
+
+            # Escribir en el campo de búsqueda activo (select2 crea un input de búsqueda)
+            search = self.page.locator(
+                "input.select2-search__field, .select2-search__field, "
+                ".chosen-search input, input[type='search']:visible"
+            ).last
+            typed = False
+            try:
+                if await search.is_visible(timeout=1500):
+                    await search.fill(query)
+                    typed = True
+            except Exception:
+                pass
+            if not typed:
+                # escribir directo con el teclado en el elemento enfocado
+                await self.page.keyboard.type(query, delay=80)
+            await log("  Código postal: esperando resultados del filtro...")
+            await self.page.wait_for_timeout(2500)   # carga asíncrona del servidor
+
+            # Elegir la primera opción del dropdown abierto
+            for opt_sel in [
+                "li.select2-results__option:not(.select2-results__message)",
+                ".select2-results__option",
+                ".chosen-results li.active-result",
+                "ul[role='listbox'] li", "li[role='option']", "div[role='option']",
+            ]:
+                try:
+                    opt = self.page.locator(opt_sel).first
+                    if await opt.is_visible(timeout=1500):
+                        txt = (await opt.inner_text())[:40]
+                        await opt.click()
+                        await self.page.wait_for_timeout(500)
+                        await log(f"  ✓ Código postal: {txt}")
+                        return True
+                except Exception:
+                    pass
+
+            # último recurso: teclado
+            await self.page.keyboard.press("ArrowDown")
+            await self.page.wait_for_timeout(300)
+            await self.page.keyboard.press("Enter")
+            await self.page.wait_for_timeout(500)
+            # verificar si quedó con valor
+            has_val = await self.page.evaluate("""
+                () => {
+                    for (const lbl of document.querySelectorAll('label')) {
+                        const t = lbl.innerText.toLowerCase();
+                        if (t.includes('código postal') || t.includes('codigo postal')) {
+                            const cont = lbl.closest('div');
+                            const txt = (cont && cont.innerText || '');
+                            return txt.toLowerCase().includes('bucaramanga');
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if has_val:
+                await log("  ✓ Código postal: seleccionado (teclado)")
+                return True
+            await log("  ✗ Código postal: no apareció ninguna opción para elegir")
+            return False
+        except Exception as e:
+            await log(f"  ✗ Código postal: {e}")
+            return False
+
     async def pandape_apply_flow(self, email: str, profile_data: dict = None, notify_fn=None) -> dict:
         """
         Ejecuta los 8 pasos completos del flujo Pandape en Python puro.
@@ -472,62 +629,8 @@ class BrowserAgent:
         await fill_vuetify_select("Género", "Mujer")
         await fill_vuetify_select("País",   "Colombia")
 
-        # Código postal — Vuetify autocomplete: clic → escribir → esperar filtro → elegir opción
-        try:
-            postal_label = self.page.locator("label", has_text="Código postal").first
-            if await postal_label.is_visible(timeout=1500):
-                await log("  Código postal: abriendo autocomplete...")
-                # Abrir: clic en el input asociado al label (sube al contenedor v-autocomplete)
-                opened = await self.page.evaluate("""
-                    () => {
-                        for (const lbl of document.querySelectorAll('label')) {
-                            if (lbl.innerText.toLowerCase().includes('código postal') || lbl.innerText.toLowerCase().includes('codigo postal')) {
-                                const cont = lbl.closest('.v-autocomplete, .v-select, .v-input');
-                                if (cont) {
-                                    const inp = cont.querySelector('input');
-                                    if (inp) { inp.focus(); inp.click(); }
-                                    cont.click();
-                                    return true;
-                                }
-                            }
-                        }
-                        return false;
-                    }
-                """)
-                if opened:
-                    await self.page.wait_for_timeout(600)
-                    # Escribir "Bucaramanga" en el input activo (el de búsqueda del autocomplete)
-                    await self.page.keyboard.type("Bucaramanga", delay=80)
-                    await log("  Código postal: escribiendo 'Bucaramanga', esperando filtro...")
-                    await self.page.wait_for_timeout(2500)   # filtrado asíncrono del servidor
-                    # Elegir primera opción del menú abierto
-                    chosen = False
-                    for opt_sel in [
-                        ".v-menu__content .v-list-item:not(.v-list-item--disabled)",
-                        ".menuable__content__active .v-list-item",
-                        "div[role='option']",
-                    ]:
-                        try:
-                            opt = self.page.locator(opt_sel).first
-                            if await opt.is_visible(timeout=2000):
-                                await opt.click()
-                                chosen = True
-                                txt = (await opt.inner_text())[:30]
-                                await log(f"  ✓ Código postal: {txt}")
-                                break
-                        except Exception:
-                            pass
-                    if not chosen:
-                        # fallback: bajar con flecha y Enter
-                        await self.page.keyboard.press("ArrowDown")
-                        await self.page.wait_for_timeout(300)
-                        await self.page.keyboard.press("Enter")
-                        await log("  Código postal: selección por teclado (ArrowDown+Enter)")
-                    await self.page.wait_for_timeout(400)
-                else:
-                    await log("  ✗ Código postal: no se pudo abrir el autocomplete")
-        except Exception as e:
-            await log(f"  ✗ Código postal: {e}")
+        # ── Código postal (OBLIGATORIO) — handler agnóstico de framework ────
+        await self._fill_codigo_postal("Bucaramanga", log)
 
         # Perfil profesional (accordion)
         pp_title = profile_data.get("professional_profile", {}).get("title", "")
@@ -547,21 +650,55 @@ class BrowserAgent:
 
         await log("✓ Información personal y perfil llenados")
 
-        async def open_accordion_form(add_button_texts):
-            """Hace clic en el botón '+ Incluir X' para abrir el sub-formulario."""
-            for t in add_button_texts:
-                try:
-                    b = self.page.get_by_role("button", name=t, exact=False).first
-                    if not await b.is_visible(timeout=1500):
-                        b = self.page.get_by_text(t, exact=False).first
-                    if await b.is_visible(timeout=1500):
-                        await b.scroll_into_view_if_needed()
-                        await b.click()
-                        await self.page.wait_for_timeout(1000)
-                        return True
-                except Exception:
-                    pass
+        async def expand_section(header_text):
+            """Expande una sección de acordeón colapsada haciendo clic en su encabezado."""
+            try:
+                header = self.page.get_by_text(header_text, exact=False).first
+                if await header.is_visible(timeout=2000):
+                    await header.scroll_into_view_if_needed()
+                    await header.click()
+                    await self.page.wait_for_timeout(1000)
+                    return True
+            except Exception:
+                pass
             return False
+
+        async def find_incluir_button(add_button_texts):
+            """Busca el botón '+ Incluir X' (visible) entre varios textos posibles."""
+            for t in add_button_texts:
+                for getter in [
+                    lambda t=t: self.page.get_by_role("button", name=t, exact=False).first,
+                    lambda t=t: self.page.get_by_text(t, exact=False).first,
+                ]:
+                    try:
+                        b = getter()
+                        if await b.is_visible(timeout=1000):
+                            return b
+                    except Exception:
+                        pass
+            return None
+
+        async def open_accordion_form(header_text, add_button_texts):
+            """
+            Abre el sub-formulario de una sección de acordeón:
+            1) si el botón '+ Incluir' ya es visible → la sección está expandida
+            2) si no → clic en el encabezado para expandir, y reintenta
+            3) clic en '+ Incluir X'
+            """
+            btn = await find_incluir_button(add_button_texts)
+            if btn is None:
+                # sección colapsada → expandir por el encabezado
+                await expand_section(header_text)
+                btn = await find_incluir_button(add_button_texts)
+            if btn is None:
+                return False
+            try:
+                await btn.scroll_into_view_if_needed()
+                await btn.click()
+                await self.page.wait_for_timeout(1000)
+                return True
+            except Exception:
+                return False
 
         async def click_save_incluir():
             """Hace clic en el botón 'Incluir' (guardar) del sub-formulario abierto."""
@@ -628,7 +765,7 @@ class BrowserAgent:
             exp = experiences[0]
             await log("Paso 6b: Agregando experiencia profesional...")
             try:
-                if await open_accordion_form(["+ Incluir experiencia", "Incluir experiencia"]):
+                if await open_accordion_form("Experiencia profesional", ["+ Incluir experiencia", "Incluir experiencia"]):
                     await fill_input("Posición", exp.get("position", ""))
                     await fill_input("Empresa", exp.get("company", ""))
                     await select_in_subform("Área", exp.get("area", "Ventas"))
@@ -658,7 +795,7 @@ class BrowserAgent:
             edu = educations[0]
             await log("Paso 6c: Agregando educación...")
             try:
-                if await open_accordion_form(["+ Incluir formación académica", "Incluir formación académica"]):
+                if await open_accordion_form("Educación", ["+ Incluir formación académica", "Incluir formación académica"]):
                     await fill_input("Curso", edu.get("degree", ""))
                     await fill_input("Institución", edu.get("institution", ""))
                     await select_in_subform("Nivel", edu.get("level", "Universidad"))
@@ -681,7 +818,7 @@ class BrowserAgent:
             course = courses[0]
             await log("Paso 6d: Agregando curso/certificación...")
             try:
-                if await open_accordion_form(["+ Incluir curso o certificación", "Incluir curso o certificación"]):
+                if await open_accordion_form("Cursos y Certificaciones", ["+ Incluir curso o certificación", "Incluir curso o certificación"]):
                     await fill_input("Nombre o título", course.get("name", ""))
                     await fill_input("Centro", course.get("institution", ""))
                     if await click_save_incluir():
@@ -698,7 +835,7 @@ class BrowserAgent:
             lang = languages[0]
             await log("Paso 6e: Agregando idioma...")
             try:
-                if await open_accordion_form(["+ Incluir idioma", "Incluir idioma"]):
+                if await open_accordion_form("Idiomas", ["+ Incluir idioma", "Incluir idioma"]):
                     await select_in_subform("Idioma", lang.get("language", "Inglés"))
                     await select_in_subform("Nivel", lang.get("level", "Intermedio"))
                     if await click_save_incluir():
@@ -715,6 +852,13 @@ class BrowserAgent:
         skills = profile_data.get("skills", [])
         if skills:
             await log("Paso 6f: Agregando habilidades...")
+            # Expandir la sección si el input no está visible
+            try:
+                inp_check = self.page.get_by_placeholder("Habilidad de búsqueda", exact=False).first
+                if not await inp_check.is_visible(timeout=1500):
+                    await expand_section("Habilidades")
+            except Exception:
+                await expand_section("Habilidades")
             added = 0
             for skill in skills[:5]:   # primeras 5 habilidades
                 try:
