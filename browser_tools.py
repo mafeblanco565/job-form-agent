@@ -285,15 +285,16 @@ class BrowserAgent:
             await self.page.wait_for_timeout(300)
             await self.page.keyboard.press("Enter")
             await self.page.wait_for_timeout(500)
-            # verificar si quedó con valor
+            # verificar si quedó con valor (ya no muestra "Seleccione" ni está vacío)
             has_val = await self.page.evaluate("""
                 () => {
                     for (const lbl of document.querySelectorAll('label')) {
                         const t = lbl.innerText.toLowerCase();
                         if (t.includes('código postal') || t.includes('codigo postal')) {
                             const cont = lbl.closest('div');
-                            const txt = (cont && cont.innerText || '');
-                            return txt.toLowerCase().includes('bucaramanga');
+                            const txt = (cont && cont.innerText || '').toLowerCase();
+                            // tiene valor si NO dice 'seleccione' y hay texto/número
+                            return !txt.includes('seleccione') && /\\d|bucar|santand/.test(txt);
                         }
                     }
                     return false;
@@ -629,8 +630,8 @@ class BrowserAgent:
         await fill_vuetify_select("Género", "Mujer")
         await fill_vuetify_select("País",   "Colombia")
 
-        # ── Código postal (OBLIGATORIO) — handler agnóstico de framework ────
-        await self._fill_codigo_postal("Bucaramanga", log)
+        # ── Código postal (OBLIGATORIO) — buscar por número 680002 y elegir cualquiera ──
+        await self._fill_codigo_postal("680002", log)
 
         # Perfil profesional (accordion)
         pp_title = profile_data.get("professional_profile", {}).get("title", "")
@@ -701,21 +702,33 @@ class BrowserAgent:
                 return False
 
         async def click_save_incluir():
-            """Hace clic en el botón 'Incluir' (guardar) del sub-formulario abierto."""
-            for getter in [
-                lambda: self.page.get_by_role("button", name="Incluir", exact=True).last,
-                lambda: self.page.locator("button", has_text="Incluir").last,
-            ]:
+            """
+            Hace clic en el botón 'Incluir' (guardar, exacto) del sub-formulario abierto
+            y verifica que el sub-formulario se cerró (el botón 'Cancelar' desaparece).
+            """
+            # El botón de guardar es exactamente 'Incluir' (los abridores son '+ Incluir X')
+            b = self.page.get_by_role("button", name="Incluir", exact=True).last
+            try:
+                if not (await b.is_visible(timeout=1500)):
+                    return False
+                if not (await b.is_enabled(timeout=1000)):
+                    await log("    ⚠ Botón 'Incluir' deshabilitado (falta algún campo)")
+                    return False
+                await b.scroll_into_view_if_needed()
+                await b.click()
+                await self.page.wait_for_timeout(1000)
+                # ¿se cerró el sub-form? el 'Cancelar' ya no debería estar visible
                 try:
-                    b = getter()
-                    if await b.is_visible(timeout=1500) and await b.is_enabled(timeout=1000):
-                        await b.scroll_into_view_if_needed()
-                        await b.click()
-                        await self.page.wait_for_timeout(900)
-                        return True
+                    cancelar = self.page.get_by_role("button", name="Cancelar", exact=True).last
+                    if await cancelar.is_visible(timeout=1000):
+                        # sigue abierto → no se guardó (validación interna)
+                        await log("    ⚠ Sub-formulario sigue abierto tras 'Incluir'")
+                        return False
                 except Exception:
                     pass
-            return False
+                return True
+            except Exception:
+                return False
 
         async def cancel_subform():
             """Cierra un sub-formulario abierto vía 'Cancelar' para no bloquear el envío."""
