@@ -151,12 +151,49 @@ class BrowserAgent:
                 pass
         return False
 
-    async def _fill_codigo_postal(self, query: str, log) -> bool:
+    async def _fill_codigo_postal(self, log) -> bool:
         """
-        Llena el campo Código postal sin asumir framework (Vuetify/Bootstrap/select2).
-        1) Vuelca la estructura real del campo
-        2) Prueba: native <select>, select2/Chosen, autocomplete genérico
+        Código postal (select2 AJAX con name='selectPostalCode').
+        Estrategia deterministe de la spec: inyectar la opción 46732
+        ('680001 - Bucaramanga - Los Santos') directamente en el <select>,
+        marcarla seleccionada, disparar change (nativo + jQuery para select2),
+        y poblar el campo CEP oculto con 680001.
         """
+        result = await self.page.evaluate("""
+            () => {
+                const VAL = '46732';
+                const TXT = '680001 - Bucaramanga - Los Santos';
+                const CEP = '680001';
+                const sel = document.querySelector('select[name="selectPostalCode"], #selectPostalCode');
+                if (!sel) return {ok:false, reason:'no se encontró select[name=selectPostalCode]'};
+                // inyectar la opción si no existe
+                let opt = [...sel.options].find(o => o.value === VAL);
+                if (!opt) { opt = new Option(TXT, VAL, true, true); sel.add(opt); }
+                opt.selected = true;
+                sel.value = VAL;
+                sel.dispatchEvent(new Event('input',  {bubbles:true}));
+                sel.dispatchEvent(new Event('change', {bubbles:true}));
+                // select2 escucha eventos jQuery — disparar trigger si jQuery existe
+                if (window.jQuery) {
+                    try { window.jQuery(sel).val(VAL).trigger('change'); } catch(e){}
+                }
+                // actualizar el render visual de select2
+                const rendered = document.querySelector('#select2-selectPostalCode-container');
+                if (rendered) { rendered.textContent = TXT; rendered.setAttribute('title', TXT); }
+                // campo CEP oculto (si existe)
+                const cep = document.querySelector('input[name="CEP"], input[name="Cep"], input[name="cep"]');
+                if (cep) { cep.value = CEP; cep.dispatchEvent(new Event('change', {bubbles:true})); }
+                return {ok: sel.value === VAL, value: sel.value, optionCount: sel.options.length};
+            }
+        """)
+        if result.get("ok"):
+            await log(f"  ✓ Código postal: 680001 - Bucaramanga (value=46732 inyectado)")
+            return True
+        await log(f"  ✗ Código postal: {result.get('reason', result)}")
+        return False
+
+    async def _fill_codigo_postal_OLD(self, query: str, log) -> bool:
+        """[obsoleto] Handler genérico previo — conservado por referencia."""
         # 1) Diagnóstico de estructura
         info = await self.page.evaluate("""
             () => {
@@ -184,6 +221,7 @@ class BrowserAgent:
             await log("  ⚠ Código postal: no existe en este formulario (omitido)")
             return False
         await log(f"  🔬 Código postal estructura: ctrl={info.get('ctrlTag')}/{info.get('ctrlType')}")
+        await log(f"  🔬 Código postal HTML: {info.get('contHTML')}")
 
         # 2a) ¿Es un <select> nativo? Intentar seleccionar opción que contenga la query
         try:
@@ -215,66 +253,63 @@ class BrowserAgent:
         except Exception:
             pass
 
-        # 2b) select2 / Chosen / custom: clic en el contenedor visible, escribir, elegir
+        # 2b) select2 (jQuery): clic REAL en el contenedor select2, escribir y elegir.
+        #     select2 NO reacciona a clicks de JS — hay que usar el mouse real de Playwright.
         try:
-            # Clic en el control: el <input> asociado o el contenedor select2
-            opened = await self.page.evaluate("""
-                () => {
-                    for (const lbl of document.querySelectorAll('label')) {
-                        const t = lbl.innerText.toLowerCase();
-                        if (t.includes('código postal') || t.includes('codigo postal')) {
-                            const cont = lbl.closest('div');
-                            if (!cont) return false;
-                            // select2 container
-                            const s2 = cont.querySelector('.select2-selection, .select2-container, .chosen-container');
-                            if (s2) { s2.click(); return 'select2'; }
-                            // input de texto
-                            const inp = cont.querySelector('input:not([type=hidden])');
-                            if (inp) { inp.focus(); inp.click(); return 'input'; }
-                            // cualquier elemento clicable
-                            cont.click(); return 'div';
-                        }
-                    }
-                    return false;
-                }
-            """)
+            # El contenedor visible de select2 para #selectPostalCode
+            opened = False
+            for cont_sel in [
+                "#select2-selectPostalCode-container",
+                "span[aria-labelledby*='selectPostalCode']",
+                "[data-select2-id='selectPostalCode'] + span .select2-selection",
+                ".js_select2-wrapper .select2-selection",
+                ".js_select2-wrapper",
+            ]:
+                try:
+                    cont = self.page.locator(cont_sel).first
+                    if await cont.is_visible(timeout=1500):
+                        await cont.scroll_into_view_if_needed()
+                        await cont.click()   # click REAL → select2 abre el dropdown
+                        opened = True
+                        await log(f"  Código postal: select2 abierto con '{cont_sel}'")
+                        break
+                except Exception:
+                    pass
             if not opened:
-                await log("  ✗ Código postal: no se pudo enfocar el control")
+                await log("  ✗ Código postal: no se pudo abrir el select2")
                 return False
-            await log(f"  Código postal: control abierto ({opened}), escribiendo '{query}'...")
-            await self.page.wait_for_timeout(500)
 
-            # Escribir en el campo de búsqueda activo (select2 crea un input de búsqueda)
-            search = self.page.locator(
-                "input.select2-search__field, .select2-search__field, "
-                ".chosen-search input, input[type='search']:visible"
-            ).last
-            typed = False
+            await self.page.wait_for_timeout(700)
+
+            # El campo de búsqueda de select2 (aparece al abrir el dropdown)
+            search = self.page.locator("input.select2-search__field").last
             try:
-                if await search.is_visible(timeout=1500):
-                    await search.fill(query)
-                    typed = True
+                await search.wait_for(state="visible", timeout=3000)
+                await search.click()
+                await search.type(query, delay=120)   # tecleo real → dispara AJAX de select2
+                await log(f"  Código postal: escrito '{query}' en búsqueda select2")
             except Exception:
-                pass
-            if not typed:
-                # escribir directo con el teclado en el elemento enfocado
-                await self.page.keyboard.type(query, delay=80)
-            await log("  Código postal: esperando resultados del filtro...")
-            await self.page.wait_for_timeout(2500)   # carga asíncrona del servidor
+                # respaldo: teclear en el documento
+                await self.page.keyboard.type(query, delay=120)
 
-            # Elegir la primera opción del dropdown abierto
+            await log("  Código postal: esperando resultados AJAX...")
+            await self.page.wait_for_timeout(3000)   # AJAX del servidor
+
+            # Elegir la primera opción real (saltando 'Buscando...' / 'Sin resultados')
             for opt_sel in [
+                "li.select2-results__option--selectable",
+                "li.select2-results__option[role='option']:not(.select2-results__message)",
                 "li.select2-results__option:not(.select2-results__message)",
                 ".select2-results__option",
-                ".chosen-results li.active-result",
-                "ul[role='listbox'] li", "li[role='option']", "div[role='option']",
             ]:
                 try:
                     opt = self.page.locator(opt_sel).first
-                    if await opt.is_visible(timeout=1500):
+                    if await opt.is_visible(timeout=2000):
                         txt = (await opt.inner_text())[:40]
+                        if "buscando" in txt.lower() or "no se encontr" in txt.lower() or "sin resultado" in txt.lower():
+                            continue
                         await opt.click()
-                        await self.page.wait_for_timeout(500)
+                        await self.page.wait_for_timeout(600)
                         await log(f"  ✓ Código postal: {txt}")
                         return True
                 except Exception:
@@ -357,19 +392,26 @@ class BrowserAgent:
                 pass
             return False
 
-        # ── PASO 3: Clic en APLICAR A ESTE PROCESO ─────────────────────────
+        # ── PASO 3: Clic en APLICAR A ESTE PROCESO (solo en páginas /Detail) ──
+        # Los enlaces directos /Apply?... ya están dentro del flujo y NO tienen
+        # este botón. Por eso, si no se encuentra, NO se falla: se continúa y los
+        # pasos siguientes detectan el estado real (correo / CV / formulario).
         await log("Paso 3: Clic en APLICAR A ESTE PROCESO...")
         await self._dismiss_cookies()
         await self.page.wait_for_timeout(800)
 
+        cur_url = (self.page.url or "").lower()
+        is_direct_apply = "/apply" in cur_url
+
         clicked = False
-        for _ in range(3):
+        attempts = 1 if is_direct_apply else 3
+        for _ in range(attempts):
             for loc in [
                 self.page.get_by_text("APLICAR A ESTE PROCESO", exact=False).first,
                 self.page.locator("button", has_text="APLICAR").first,
             ]:
                 try:
-                    if await loc.is_visible(timeout=2000):
+                    if await loc.is_visible(timeout=1500):
                         await loc.click()
                         clicked = True
                         break
@@ -379,10 +421,11 @@ class BrowserAgent:
                 break
             await self.page.wait_for_timeout(600)
 
-        if not clicked:
-            return {"success": False, "step": "apply_button", "error": "No se encontró APLICAR A ESTE PROCESO"}
-
-        await self.page.wait_for_timeout(1200)
+        if clicked:
+            await log("✓ APLICAR A ESTE PROCESO")
+            await self.page.wait_for_timeout(1200)
+        else:
+            await log("ℹ Sin botón APLICAR (enlace directo /Apply) — continuando en el flujo")
 
         # ── PASO 3b: Dropdown → Redactar currículum ─────────────────────────
         for text in ["Redactar currículum", "Redactar curriculum"]:
@@ -622,16 +665,31 @@ class BrowserAgent:
         except Exception as e:
             await log(f"  ✗ Checkbox s/n: {e}")
 
-        # Selects nativos (Nacionalidad y Tipo ID usan <select> nativo)
-        await select_value("select[id*='nationality' i], select[id*='naciona' i]", "48", "Nacionalidad")
-        await select_value("select[id*='identification' i], select[id*='identifi' i]", "1", "Tipo ID")
+        # ── Selects personales por atributo name exacto (Pandapé) ───────────
+        async def select_by_name(name, value, text=""):
+            ok = await self.page.evaluate("""
+                (args) => {
+                    const [name, value] = args;
+                    const sel = document.querySelector('select[name="'+name+'"]');
+                    if (!sel) return false;
+                    let found = false;
+                    for (const o of sel.options) { if (o.value === value) { o.selected = true; found = true; } }
+                    if (!found) sel.value = value;
+                    sel.dispatchEvent(new Event('change', {bubbles:true}));
+                    if (window.jQuery) { try { window.jQuery(sel).trigger('change'); } catch(e){} }
+                    return sel.value === value;
+                }
+            """, [name, str(value)])
+            await log(f"  {'✓' if ok else '✗'} select[{name}] = {value} {text}")
+            return ok
 
-        # Vuetify v-select para Género y País
-        await fill_vuetify_select("Género", "Mujer")
-        await fill_vuetify_select("País",   "Colombia")
+        await select_by_name("IdNationality", "48", "Colombiano")
+        await select_by_name("IdIdentificationDocumentType", "1", "Cédula de ciudadanía")
+        await select_by_name("IdSex", "2", "Mujer")
+        await select_by_name("IdLocation1", "48", "Colombia")
 
-        # ── Código postal (OBLIGATORIO) — buscar por número 680002 y elegir cualquiera ──
-        await self._fill_codigo_postal("680002", log)
+        # ── Código postal (OBLIGATORIO): inyectar opción 46732 en el select ──
+        await self._fill_codigo_postal(log)
 
         # Perfil profesional (accordion)
         pp_title = profile_data.get("professional_profile", {}).get("title", "")
@@ -742,6 +800,38 @@ class BrowserAgent:
                 pass
             return False
 
+        async def diagnose_subform():
+            """Vuelca todos los campos del sub-formulario actualmente abierto
+            (el que contiene el botón 'Cancelar' visible) con su valor y estado,
+            para saber exactamente qué bloquea el botón 'Incluir'."""
+            return await self.page.evaluate("""
+                () => {
+                    const cancelBtns = [...document.querySelectorAll('button')]
+                        .filter(b => (b.innerText||'').trim() === 'Cancelar' && b.offsetParent !== null);
+                    if (!cancelBtns.length) return {found:false};
+                    const btn = cancelBtns[cancelBtns.length-1];
+                    let container = btn.closest('form') || btn.closest('.v-card') || btn.closest('.v-form') || btn.parentElement.parentElement.parentElement;
+                    const fields = [];
+                    container.querySelectorAll('input,select,textarea').forEach(el => {
+                        if (el.type === 'hidden') return;
+                        if (el.offsetParent === null) return;
+                        let lbl = '';
+                        if (el.id) { const l = document.querySelector('label[for="'+el.id+'"]'); if(l) lbl = l.innerText.trim(); }
+                        if (!lbl) { const p = el.closest('.v-input__slot,.v-text-field__slot,div'); if (p) { const l = p.querySelector('label'); if (l) lbl = l.innerText.trim(); } }
+                        fields.push({
+                            tag: el.tagName, type: el.type||'', name: el.name||el.id||'',
+                            label: lbl, value: (el.value||'').substring(0,40),
+                            checked: el.type==='checkbox'||el.type==='radio' ? el.checked : undefined,
+                            required: el.required,
+                            errorClass: (el.closest('.v-input')||{}).className && (el.closest('.v-input').className.includes('error--text'))
+                        });
+                    });
+                    const errors = [...container.querySelectorAll('.error--text .v-messages__message, .v-messages__message')]
+                        .map(e => e.innerText.trim()).filter(t=>t);
+                    return {found:true, fields, errors};
+                }
+            """)
+
         async def select_in_subform(label_text, option_text):
             """Selecciona una opción en un <select> nativo o v-select dentro del sub-form."""
             # 1. intentar <select> nativo cuyas opciones contengan el texto buscado
@@ -782,14 +872,19 @@ class BrowserAgent:
                     await fill_input("Posición", exp.get("position", ""))
                     await fill_input("Empresa", exp.get("company", ""))
                     await select_in_subform("Área", exp.get("area", "Ventas"))
-                    await fill_input("Fecha de inicio", exp.get("start_date_input", "01/03/2026"))
+                    # IMPORTANTE: marcar "Actualmente trabajo aquí" ANTES de llenar
+                    # "Fecha de inicio" — al marcarlo, Vuetify re-renderiza la fila de
+                    # fechas (oculta "Fecha de finalización") y eso resetea cualquier
+                    # valor ya escrito en "Fecha de inicio" si se llenó antes.
                     if exp.get("current"):
                         try:
                             await self.page.get_by_text("Actualmente trabajo aquí", exact=False).first.click()
                             await log("    ✓ Actualmente trabajo aquí")
+                            await self.page.wait_for_timeout(400)
                         except Exception:
                             pass
-                    else:
+                    await fill_input("Fecha de inicio", exp.get("start_date_input", "01/03/2026"))
+                    if not exp.get("current"):
                         await fill_input("Fecha de finalización", exp.get("end_date_input", ""))
                     await fill_input("Descripción", exp.get("description", ""))
                     if await click_save_incluir():
@@ -818,6 +913,10 @@ class BrowserAgent:
                     if await click_save_incluir():
                         await log("  ✓ Educación incluida")
                     else:
+                        sub_diag = await diagnose_subform()
+                        await log(f"  🔬 Educación sub-form (campos): {sub_diag.get('fields')}")
+                        if sub_diag.get("errors"):
+                            await log(f"  🔬 Educación sub-form (errores): {sub_diag['errors']}")
                         await cancel_subform()
                         await log("  ✗ Educación: no se pudo guardar → cancelada")
                 else:
@@ -825,22 +924,11 @@ class BrowserAgent:
             except Exception as e:
                 await log(f"  ✗ Educación: {e}")
 
-        # ── PASO 6d: Cursos y Certificaciones ───────────────────────────────
-        courses = profile_data.get("courses", [])
-        if courses:
-            course = courses[0]
-            await log("Paso 6d: Agregando curso/certificación...")
-            try:
-                if await open_accordion_form("Cursos y Certificaciones", ["+ Incluir curso o certificación", "Incluir curso o certificación"]):
-                    await fill_input("Nombre o título", course.get("name", ""))
-                    await fill_input("Centro", course.get("institution", ""))
-                    if await click_save_incluir():
-                        await log("  ✓ Curso incluido")
-                    else:
-                        await cancel_subform()
-                        await log("  ✗ Curso: no se pudo guardar → cancelado")
-            except Exception as e:
-                await log(f"  ✗ Curso: {e}")
+        # ── PASO 6d: Cursos y Certificaciones — OMITIDO ─────────────────────
+        # Esta sección tiene campos obligatorios (Año de finalización) que dejan
+        # el botón 'Incluir' deshabilitado y el sub-form abierto, bloqueando el
+        # envío. El usuario tampoco la llena manualmente. Se omite a propósito.
+        await log("Paso 6d: Cursos y Certificaciones — omitido (opcional, evita bloqueo)")
 
         # ── PASO 6e: Idiomas ────────────────────────────────────────────────
         languages = profile_data.get("languages", [])
